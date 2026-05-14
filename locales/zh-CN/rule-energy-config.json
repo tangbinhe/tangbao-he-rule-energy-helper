@@ -1,0 +1,16 @@
+{
+    "rule-energy-config": {
+        "label": {
+            "name": "名称",
+            "broker": "MQTT Broker",
+            "port": "端口",
+            "user": "用户名",
+            "password": "密码",
+            "clientId": "Client ID",
+            "ruleSubTopic": "规则下发主题",
+            "triggerSubTopic": "触发源下发主题",
+            "outputSubTopic": "输出配置下发主题",
+            "statusPubTopic": "状态上报主题"
+        }
+    }
+}

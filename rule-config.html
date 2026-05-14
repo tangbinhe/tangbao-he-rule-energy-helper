@@ -1,0 +1,72 @@
+<script type="text/javascript">
+    RED.nodes.registerType('rule-energy-config', {
+        category: 'config',
+        defaults: {
+            name: { value: '' },
+            broker: { value: 'localhost', required: true },
+            port: { value: '1883', required: true, validate: RED.validators.number() },
+            clientId: { value: '', required: false },
+            ruleSubTopic: { value: 'cloud/rules/down', required: true },
+            triggerSubTopic: { value: 'cloud/trigger/down', required: false },
+            outputSubTopic: { value: 'cloud/output/down', required: false },
+            statusPubTopic: { value: 'cloud/status/up', required: false }
+        },
+        credentials: {
+            user: { type: 'text' },
+            password: { type: 'password' }
+        },
+        label: function() {
+            return this.name || (this.broker + ':' + this.port);
+        }
+    });
+</script>
+
+<script type="text/x-red" data-template-name="rule-energy-config">
+    <div class="form-row">
+        <label for="node-config-input-name"><i class="fa fa-tag"></i> 名称</label>
+        <input type="text" id="node-config-input-name" placeholder="云端规则中心">
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-broker"><i class="fa fa-server"></i> MQTT Broker</label>
+        <input type="text" id="node-config-input-broker" placeholder="localhost">
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-port"><i class="fa fa-plug"></i> 端口</label>
+        <input type="text" id="node-config-input-port" placeholder="1883">
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-user"><i class="fa fa-user"></i> 用户名</label>
+        <input type="text" id="node-config-input-user">
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-password"><i class="fa fa-key"></i> 密码</label>
+        <input type="password" id="node-config-input-password">
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-clientId"><i class="fa fa-id-card"></i> Client ID</label>
+        <input type="text" id="node-config-input-clientId" placeholder="自动生成">
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-ruleSubTopic"><i class="fa fa-cloud-download"></i> 规则下发主题</label>
+        <input type="text" id="node-config-input-ruleSubTopic" placeholder="cloud/rules/down">
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-triggerSubTopic"><i class="fa fa-bolt"></i> 触发源下发主题</label>
+        <input type="text" id="node-config-input-triggerSubTopic" placeholder="cloud/trigger/down">
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-outputSubTopic"><i class="fa fa-sign-out"></i> 输出配置下发主题</label>
+        <input type="text" id="node-config-input-outputSubTopic" placeholder="cloud/output/down">
+    </div>
+    <div class="form-row">
+        <label for="node-config-input-statusPubTopic"><i class="fa fa-upload"></i> 状态上报主题</label>
+        <input type="text" id="node-config-input-statusPubTopic" placeholder="cloud/status/up">
+    </div>
+</script>
+
+<script type="text/x-red" data-help-name="rule-energy-config">
+    <p>规则引擎云端连接配置节点，负责通过 MQTT 接收云端下发的规则、触发源关联和输出配置。</p>
+    <p><b>MQTT 连接</b>：配置 Broker 地址、端口、认证信息。</p>
+    <p><b>主题配置</b>：可自定义规则下发、触发源下发、输出配置下发和状态上报的主题。</p>
+    <p><b>本地缓存</b>：规则会自动持久化到本地文件，防止 Node-RED 重启丢失。</p>
+</script>

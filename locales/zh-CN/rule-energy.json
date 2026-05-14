@@ -1,0 +1,35 @@
+{
+    "rule-energy": {
+        "label": {
+            "name": "名称",
+            "ruleConfig": "云端配置",
+            "triggerSource": "触发源",
+            "triggerTopic": "触发主题",
+            "outputMode": "输出方式",
+            "outputTopic": "输出主题",
+            "httpUrl": "HTTP 地址",
+            "httpMethod": "HTTP 方法",
+            "httpHeaders": "HTTP 请求头"
+        },
+        "triggerSource": {
+            "msg": "msg 消息流入",
+            "mqtt": "MQTT 订阅",
+            "cloud": "云端下发关联",
+            "link": "link in 节点",
+            "all": "全部（msg + mqtt + cloud + link）"
+        },
+        "outputMode": {
+            "msg": "msg 标准输出",
+            "mqtt": "MQTT 发布",
+            "cloud": "云端下发关联",
+            "link": "link out 输出",
+            "http": "HTTP 请求",
+            "all": "全部（msg + mqtt + cloud + http + link）"
+        },
+        "httpMethod": {
+            "POST": "POST",
+            "GET": "GET",
+            "PUT": "PUT"
+        }
+    }
+}

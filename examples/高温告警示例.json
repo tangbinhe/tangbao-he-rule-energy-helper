@@ -1,0 +1,79 @@
+[
+    {
+        "id": "rule-config-1",
+        "type": "rule-energy-config",
+        "name": "云端规则中心",
+        "broker": "localhost",
+        "port": "1883",
+        "clientId": "rule-client-001",
+        "ruleSubTopic": "cloud/rules/down",
+        "triggerSubTopic": "cloud/trigger/down",
+        "outputSubTopic": "cloud/output/down",
+        "statusPubTopic": "cloud/status/up",
+        "user": "",
+        "password": "",
+        "x": 200,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "inject-trigger",
+        "type": "inject",
+        "name": "模拟触发数据",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "{\"subsystemId\":\"HVAC\",\"equipTypeId\":\"chiller\",\"pointTypeId\":\"temp\",\"deviceId\":\"DEV001\",\"value\":35.5}",
+        "payloadType": "json",
+        "x": 200,
+        "y": 200,
+        "wires": [
+            [
+                "rule-energy-1"
+            ]
+        ]
+    },
+    {
+        "id": "rule-energy-1",
+        "type": "rule-energy",
+        "name": "规则引擎",
+        "ruleConfig": "rule-config-1",
+        "triggerSource": "msg",
+        "triggerTopic": "",
+        "outputMode": "msg",
+        "outputTopic": "",
+        "httpUrl": "",
+        "httpMethod": "POST",
+        "httpHeaders": "{}",
+        "x": 450,
+        "y": 200,
+        "wires": [
+            [
+                "debug-output"
+            ]
+        ]
+    },
+    {
+        "id": "debug-output",
+        "type": "debug",
+        "name": "输出结果",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 650,
+        "y": 200,
+        "wires": []
+    }
+]

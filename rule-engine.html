@@ -1,0 +1,860 @@
+<script type="text/javascript">
+    RED.nodes.registerType('rule-energy', {
+        category: 'rule-energy',
+        color: '#E9967A',
+        defaults: {
+            name: { value: '' },
+            ruleConfig: { value: '', type: 'rule-energy-config', required: true },
+            triggerSource: { value: 'msg', required: true },
+            triggerTopic: { value: '', required: false },
+            outputMode: { value: 'msg', required: true },
+            outputTopic: { value: '', required: false },
+            httpUrl: { value: '', required: false },
+            httpMethod: { value: 'POST', required: false },
+            httpHeaders: { value: '{}', required: false },
+            rules: { value: '[]', required: false }
+        },
+        inputs: 1,
+        outputs: 1,
+        icon: 'font-awesome/fa-cogs',
+        label: function() {
+            return this.name || '规则引擎';
+        },
+        labelStyle: function() {
+            return this.name ? 'node_label_italic' : '';
+        },
+        oneditprepare: function() {
+            var node = this;
+
+            // ==================== 规则可视化编辑器 ====================
+            var rules = [];
+            try {
+                rules = JSON.parse(node.rules || '[]');
+            } catch(e) { rules = []; }
+
+            var currentRuleIndex = -1;
+            var currentStepIndex = -1;
+            var LETTER_LIST = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+            // 规则列表渲染
+            function renderRuleList() {
+                var html = '';
+                for (var i = 0; i < rules.length; i++) {
+                    var rule = rules[i];
+                    var isActive = (i === currentRuleIndex) ? 'active' : '';
+                    html += '<div class="rule-list-item ' + isActive + '" data-index="' + i + '">';
+                    html += '  <div class="rule-list-item-info">';
+                    html += '    <span class="rule-list-item-name">' + (rule.ruleName || '未命名规则') + '</span>';
+                    html += '    <span class="rule-list-item-type">' + (rule.ruleType === 'logical' ? '逻辑告警' : '联动控制') + '</span>';
+                    html += '  </div>';
+                    html += '  <div class="rule-list-item-actions">';
+                    html += '    <i class="fa fa-copy rule-list-item-btn" title="复制" data-action="copy" data-index="' + i + '"></i>';
+                    html += '    <i class="fa fa-trash rule-list-item-btn" title="删除" data-action="delete" data-index="' + i + '"></i>';
+                    html += '  </div>';
+                    html += '</div>';
+                }
+                $('#rule-list-container').html(html);
+            }
+
+            // 规则详情渲染（步骤流）
+            function renderRuleDetail() {
+                if (currentRuleIndex < 0 || currentRuleIndex >= rules.length) {
+                    $('#rule-detail-container').html('<div class="rule-empty-tip">请从左侧选择一个规则进行编辑</div>');
+                    return;
+                }
+                var rule = rules[currentRuleIndex];
+                var html = '';
+
+                // 规则基本信息
+                html += '<div class="rule-basic-info">';
+                html += '  <div class="form-row">';
+                html += '    <label>规则名称</label>';
+                html += '    <input type="text" class="rule-input" id="rule-name-input" value="' + (rule.ruleName || '') + '" placeholder="请输入规则名称">';
+                html += '  </div>';
+                html += '  <div class="form-row">';
+                html += '    <label>规则类型</label>';
+                html += '    <select class="rule-select" id="rule-type-select">';
+                html += '      <option value="logical"' + (rule.ruleType === 'logical' ? ' selected' : '') + '>逻辑告警</option>';
+                html += '      <option value="linkage"' + (rule.ruleType === 'linkage' ? ' selected' : '') + '>联动控制</option>';
+                html += '    </select>';
+                html += '  </div>';
+                html += '  <div class="form-row">';
+                html += '    <label>告警等级</label>';
+                html += '    <select class="rule-select" id="rule-alarm-level">';
+                html += '      <option value="">请选择</option>';
+                html += '      <option value="1"' + (rule.alarmLevel === '1' ? ' selected' : '') + '>紧急</option>';
+                html += '      <option value="2"' + (rule.alarmLevel === '2' ? ' selected' : '') + '>重要</option>';
+                html += '      <option value="3"' + (rule.alarmLevel === '3' ? ' selected' : '') + '>一般</option>';
+                html += '      <option value="4"' + (rule.alarmLevel === '4' ? ' selected' : '') + '>提示</option>';
+                html += '    </select>';
+                html += '  </div>';
+                html += '  <div class="form-row">';
+                html += '    <label>规则描述</label>';
+                html += '    <textarea class="rule-textarea" id="rule-desc-input" rows="2" placeholder="请输入规则描述">' + (rule.ruleDesc || '') + '</textarea>';
+                html += '  </div>';
+                html += '</div>';
+
+                // 步骤流
+                html += '<div class="step-flow-container">';
+                html += '  <h4 class="step-flow-title">规则配置</h4>';
+                html += '  <div class="step-flow-list">';
+
+                var partList = rule.partList || [];
+                for (var s = 0; s < partList.length; s++) {
+                    var step = partList[s];
+                    var isCurrentStep = (step.stepIndex === currentStepIndex);
+                    html += '<div class="step-box' + (isCurrentStep ? ' current-step' : '') + '" data-step-index="' + step.stepIndex + '">';
+                    html += '  <div class="step-header">';
+                    html += '    <span class="step-name">' + (step.ruleName || ('步骤' + step.stepIndex)) + '</span>';
+                    html += '    <i class="fa fa-trash step-delete-btn" title="删除步骤" data-step-index="' + step.stepIndex + '"></i>';
+                    html += '  </div>';
+                    html += '  <div class="step-items">';
+
+                    var items = step.partList || [];
+                    for (var k = 0; k < items.length; k++) {
+                        var item = items[k];
+                        html += renderStepItem(item);
+                    }
+
+                    html += '  </div>';
+                    html += '</div>';
+                }
+
+                html += '  </div>';
+
+                // 添加步骤按钮
+                html += '  <div class="step-actions">';
+                html += '    <button class="red-ui-button red-ui-button-small" id="btn-add-step"><i class="fa fa-plus"></i> 添加步骤</button>';
+                html += '  </div>';
+                html += '</div>';
+
+                // 步骤内组件添加按钮（当选中某个步骤时显示）
+                if (currentStepIndex > 0) {
+                    html += '<div class="step-item-actions-bar">';
+                    html += '  <span class="step-item-actions-label">向当前步骤添加组件：</span>';
+                    html += '  <button class="red-ui-button red-ui-button-small" id="btn-add-datasource"><i class="fa fa-database"></i> 数据源</button>';
+                    html += '  <button class="red-ui-button red-ui-button-small" id="btn-add-effective-time"><i class="fa fa-clock-o"></i> 生效时间</button>';
+                    html += '  <button class="red-ui-button red-ui-button-small" id="btn-add-condition"><i class="fa fa-code"></i> 判断条件</button>';
+                    if (rule.ruleType === 'logical') {
+                        html += '  <button class="red-ui-button red-ui-button-small" id="btn-add-alarm"><i class="fa fa-bell"></i> 告警</button>';
+                    } else {
+                        html += '  <button class="red-ui-button red-ui-button-small" id="btn-add-control"><i class="fa fa-toggle-on"></i> 控制</button>';
+                    }
+                    html += '</div>';
+                }
+
+                $('#rule-detail-container').html(html);
+                bindRuleDetailEvents();
+            }
+
+            // 渲染单个步骤组件卡片
+            function renderStepItem(item) {
+                var html = '<div class="step-item-card" data-type="' + item.type + '">';
+                html += '  <div class="step-item-card-header">';
+
+                switch(item.type) {
+                    case '4':
+                        html += '    <span class="step-item-card-title"><i class="fa fa-database"></i> 数据源 ' + (item.ruleName || '') + '</span>';
+                        html += '  </div>';
+                        html += '  <div class="step-item-card-body">';
+                        html += '    <div class="step-item-field"><label>子系统</label><span>' + (item.subsystemId || '-') + '</span></div>';
+                        html += '    <div class="step-item-field"><label>设备类型</label><span>' + (item.equipTypeId || '-') + '</span></div>';
+                        html += '    <div class="step-item-field"><label>点位类型</label><span>' + (item.pointTypeId || '-') + '</span></div>';
+                        break;
+                    case '5':
+                        html += '    <span class="step-item-card-title"><i class="fa fa-clock-o"></i> 生效时间</span>';
+                        html += '  </div>';
+                        html += '  <div class="step-item-card-body">';
+                        html += '    <div class="step-item-field"><label>生效日期</label><span>' + (item.effectDateName || '全部日期') + '</span></div>';
+                        html += '    <div class="step-item-field"><label>生效时间段</label><span>' + (item.effectTimeName || '全天') + '</span></div>';
+                        break;
+                    case '6':
+                        html += '    <span class="step-item-card-title"><i class="fa fa-code"></i> 判断条件</span>';
+                        html += '  </div>';
+                        html += '  <div class="step-item-card-body">';
+                        html += '    <div class="step-item-field"><label>条件类型</label><span>' + (item.functionType === '1' ? '公式计算' : '状态判断') + '</span></div>';
+                        html += '    <div class="step-item-field"><label>条件内容</label><span class="step-item-formula">' + (item.function || '-') + '</span></div>';
+                        html += '    <div class="step-item-field"><label>延时</label><span>' + (item.delay || '0') + (item.delayType === 1 ? ' min' : ' s') + '</span></div>';
+                        break;
+                    case '7':
+                        html += '    <span class="step-item-card-title"><i class="fa fa-toggle-on"></i> 控制</span>';
+                        html += '  </div>';
+                        html += '  <div class="step-item-card-body">';
+                        html += '    <div class="step-item-field"><label>子系统</label><span>' + (item.subsystemId || '-') + '</span></div>';
+                        html += '    <div class="step-item-field"><label>设备类型</label><span>' + (item.equipTypeId || '-') + '</span></div>';
+                        html += '    <div class="step-item-field"><label>点位类型</label><span>' + (item.pointTypeId || '-') + '</span></div>';
+                        html += '    <div class="step-item-field"><label>设定值</label><span>' + (item.function || '-') + '</span></div>';
+                        break;
+                    case '8':
+                        html += '    <span class="step-item-card-title"><i class="fa fa-bell"></i> 告警</span>';
+                        html += '  </div>';
+                        html += '  <div class="step-item-card-body">';
+                        html += '    <div class="step-item-field"><label>设备类型</label><span>' + (item.equipTypeId || '-') + '</span></div>';
+                        html += '    <div class="step-item-field"><label>点位类型</label><span>' + (item.pointTypeId || '-') + '</span></div>';
+                        html += '    <div class="step-item-field"><label>告警等级</label><span>' + (item.alarmLevel || '-') + '</span></div>';
+                        html += '    <div class="step-item-field"><label>告警描述</label><span>' + (item.alarmDesc || '-') + '</span></div>';
+                        break;
+                }
+
+                html += '  </div>';
+                html += '  <div class="step-item-card-footer">';
+                html += '    <i class="fa fa-edit step-item-edit-btn" title="编辑"></i>';
+                html += '    <i class="fa fa-trash step-item-delete-btn" title="删除"></i>';
+                html += '  </div>';
+                html += '</div>';
+                return html;
+            }
+
+            // 绑定规则详情区域事件
+            function bindRuleDetailEvents() {
+                // 步骤点击选中
+                $('.step-box').on('click', function(e) {
+                    if ($(e.target).closest('.step-delete-btn').length) return;
+                    currentStepIndex = parseInt($(this).data('step-index'));
+                    renderRuleDetail();
+                });
+
+                // 删除步骤
+                $('.step-delete-btn').on('click', function() {
+                    var stepIdx = parseInt($(this).data('step-index'));
+                    var rule = rules[currentRuleIndex];
+                    rule.partList = rule.partList.filter(function(s) { return s.stepIndex !== stepIdx; });
+                    if (currentStepIndex === stepIdx) currentStepIndex = -1;
+                    renderRuleDetail();
+                });
+
+                // 添加步骤
+                $('#btn-add-step').on('click', function() {
+                    var rule = rules[currentRuleIndex];
+                    if (!rule.partList) rule.partList = [];
+                    var maxStep = 0;
+                    for (var i = 0; i < rule.partList.length; i++) {
+                        if (rule.partList[i].stepIndex > maxStep) maxStep = rule.partList[i].stepIndex;
+                    }
+                    var newStep = {
+                        stepIndex: maxStep + 1,
+                        ruleName: '步骤' + (maxStep + 1),
+                        partList: []
+                    };
+                    rule.partList.push(newStep);
+                    currentStepIndex = newStep.stepIndex;
+                    renderRuleDetail();
+                });
+
+                // 添加数据源
+                $('#btn-add-datasource').on('click', function() {
+                    addStepItem('4');
+                });
+                // 添加生效时间
+                $('#btn-add-effective-time').on('click', function() {
+                    addStepItem('5');
+                });
+                // 添加判断条件
+                $('#btn-add-condition').on('click', function() {
+                    addStepItem('6');
+                });
+                // 添加告警
+                $('#btn-add-alarm').on('click', function() {
+                    addStepItem('8');
+                });
+                // 添加控制
+                $('#btn-add-control').on('click', function() {
+                    addStepItem('7');
+                });
+
+                // 规则基本信息变更
+                $('#rule-name-input, #rule-desc-input').on('change', function() {
+                    saveCurrentRuleBasicInfo();
+                });
+                $('#rule-type-select, #rule-alarm-level').on('change', function() {
+                    saveCurrentRuleBasicInfo();
+                    renderRuleDetail(); // 类型切换需要重新渲染（告警/控制按钮变化）
+                });
+            }
+
+            // 向当前步骤添加组件
+            function addStepItem(type) {
+                var rule = rules[currentRuleIndex];
+                var step = rule.partList.find(function(s) { return s.stepIndex === currentStepIndex; });
+                if (!step) return;
+                if (!step.partList) step.partList = [];
+
+                var newItem = { type: type };
+                switch(type) {
+                    case '4': // 数据源
+                        var usedLetters = '';
+                        for (var i = 0; i < step.partList.length; i++) {
+                            if (step.partList[i].type === '4' && step.partList[i].ruleName) {
+                                usedLetters += step.partList[i].ruleName;
+                            }
+                        }
+                        var availableLetter = 'A';
+                        for (var j = 0; j < LETTER_LIST.length; j++) {
+                            if (usedLetters.indexOf(LETTER_LIST[j]) < 0) {
+                                availableLetter = LETTER_LIST[j];
+                                break;
+                            }
+                        }
+                        newItem.ruleName = availableLetter;
+                        newItem.subsystemId = '';
+                        newItem.equipTypeId = '';
+                        newItem.pointTypeId = '';
+                        break;
+                    case '5': // 生效时间
+                        newItem.effectDateName = '';
+                        newItem.effectTimeName = '';
+                        break;
+                    case '6': // 判断条件
+                        newItem.functionType = '0';
+                        newItem.function = '';
+                        newItem.delay = '';
+                        newItem.delayType = 0;
+                        break;
+                    case '7': // 控制
+                        newItem.subsystemId = '';
+                        newItem.equipTypeId = '';
+                        newItem.pointTypeId = '';
+                        newItem.function = '';
+                        break;
+                    case '8': // 告警
+                        newItem.equipTypeId = '';
+                        newItem.pointTypeId = '';
+                        newItem.alarmLevel = '';
+                        newItem.alarmDesc = '';
+                        break;
+                }
+                step.partList.push(newItem);
+                renderRuleDetail();
+            }
+
+            // 保存当前规则基本信息
+            function saveCurrentRuleBasicInfo() {
+                if (currentRuleIndex < 0) return;
+                var rule = rules[currentRuleIndex];
+                rule.ruleName = $('#rule-name-input').val() || '';
+                rule.ruleType = $('#rule-type-select').val() || 'logical';
+                rule.alarmLevel = $('#rule-alarm-level').val() || '';
+                rule.ruleDesc = $('#rule-desc-input').val() || '';
+            }
+
+            // 绑定规则列表事件
+            function bindRuleListEvents() {
+                // 点击规则项选中
+                $('.rule-list-item').on('click', function(e) {
+                    if ($(e.target).closest('.rule-list-item-btn').length) return;
+                    currentRuleIndex = parseInt($(this).data('index'));
+                    currentStepIndex = -1;
+                    renderRuleList();
+                    renderRuleDetail();
+                });
+
+                // 复制规则
+                $('.rule-list-item-btn[data-action="copy"]').on('click', function() {
+                    var idx = parseInt($(this).data('index'));
+                    var ruleCopy = JSON.parse(JSON.stringify(rules[idx]));
+                    ruleCopy.id = 'rule_' + Date.now();
+                    ruleCopy.ruleName = ruleCopy.ruleName + '_副本';
+                    // 重新分配 stepIndex
+                    var maxStep = 0;
+                    for (var i = 0; i < rules.length; i++) {
+                        var pl = rules[i].partList || [];
+                        for (var j = 0; j < pl.length; j++) {
+                            if (pl[j].stepIndex > maxStep) maxStep = pl[j].stepIndex;
+                        }
+                    }
+                    var stepOffset = maxStep;
+                    var pl = ruleCopy.partList || [];
+                    for (var k = 0; k < pl.length; k++) {
+                        pl[k].stepIndex = stepOffset + k + 1;
+                    }
+                    rules.push(ruleCopy);
+                    currentRuleIndex = rules.length - 1;
+                    renderRuleList();
+                    renderRuleDetail();
+                });
+
+                // 删除规则
+                $('.rule-list-item-btn[data-action="delete"]').on('click', function() {
+                    var idx = parseInt($(this).data('index'));
+                    rules.splice(idx, 1);
+                    if (currentRuleIndex === idx) {
+                        currentRuleIndex = -1;
+                        currentStepIndex = -1;
+                    } else if (currentRuleIndex > idx) {
+                        currentRuleIndex--;
+                    }
+                    renderRuleList();
+                    renderRuleDetail();
+                });
+            }
+
+            // 添加新规则
+            $('#btn-add-rule').on('click', function() {
+                var newRule = {
+                    id: 'rule_' + Date.now(),
+                    ruleName: '新建规则',
+                    ruleType: 'logical',
+                    ruleStatus: '1',
+                    alarmLevel: '',
+                    ruleDesc: '',
+                    partList: []
+                };
+                rules.push(newRule);
+                currentRuleIndex = rules.length - 1;
+                currentStepIndex = -1;
+                renderRuleList();
+                renderRuleDetail();
+            });
+
+            // 初始化渲染
+            renderRuleList();
+            renderRuleDetail();
+            bindRuleListEvents();
+
+            // 保存时序列化规则
+            $('#node-dialog-ok').on('click', function() {
+                saveCurrentRuleBasicInfo();
+                node.rules = JSON.stringify(rules);
+            });
+
+            // ==================== 原有触发源/输出配置 UI ====================
+            function updateUI() {
+                var source = $('#node-input-triggerSource').val();
+                var needTopic = (source === 'mqtt' || source === 'cloud');
+                $('#triggerTopic-row').toggle(needTopic);
+
+                var mode = $('#node-input-outputMode').val() || 'msg';
+                var needMqttTopic = (mode === 'mqtt' || mode === 'cloud' || mode === 'all');
+                var needHttp = (mode === 'http' || mode === 'all');
+                $('#outputTopic-row').toggle(needMqttTopic);
+                $('#httpUrl-row').toggle(needHttp);
+                $('#httpMethod-row').toggle(needHttp);
+                $('#httpHeaders-row').toggle(needHttp);
+
+                // 只有当触发源或输出方式用到 mqtt/cloud 时才显示云端配置
+                var needConfig = (source === 'mqtt' || source === 'cloud' || source === 'all' ||
+                                  mode === 'mqtt' || mode === 'cloud' || mode === 'all');
+                $('#ruleConfig-row').toggle(needConfig);
+            }
+
+            $('#node-input-triggerSource').on('change', updateUI);
+            $('#node-input-outputMode').on('change', updateUI);
+            setTimeout(updateUI, 0);
+        }
+    });
+</script>
+
+<script type="text/x-red" data-template-name="rule-energy">
+    <style>
+        /* ===== 规则编辑器整体布局 ===== */
+        .rule-editor-container {
+            display: flex;
+            height: 520px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .rule-editor-sidebar {
+            width: 220px;
+            border-right: 1px solid #ddd;
+            background: #f9f9f9;
+            display: flex;
+            flex-direction: column;
+        }
+        .rule-editor-sidebar-header {
+            padding: 10px 12px;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .rule-editor-sidebar-header h4 {
+            margin: 0;
+            font-size: 14px;
+        }
+        .rule-editor-sidebar-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px;
+        }
+        .rule-editor-main {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            background: #fff;
+        }
+
+        /* ===== 规则列表项 ===== */
+        .rule-list-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 10px;
+            margin-bottom: 4px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .rule-list-item:hover {
+            background: #e6f2ff;
+        }
+        .rule-list-item.active {
+            background: #b3d9ff;
+        }
+        .rule-list-item-info {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-width: 0;
+        }
+        .rule-list-item-name {
+            font-size: 13px;
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .rule-list-item-type {
+            font-size: 11px;
+            color: #888;
+            margin-top: 2px;
+        }
+        .rule-list-item-actions {
+            display: flex;
+            gap: 6px;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        .rule-list-item:hover .rule-list-item-actions {
+            opacity: 1;
+        }
+        .rule-list-item-btn {
+            font-size: 12px;
+            color: #999;
+            cursor: pointer;
+            padding: 2px;
+        }
+        .rule-list-item-btn:hover {
+            color: #333;
+        }
+
+        /* ===== 规则详情区域 ===== */
+        .rule-empty-tip {
+            text-align: center;
+            color: #999;
+            padding: 60px 20px;
+            font-size: 14px;
+        }
+        .rule-basic-info {
+            background: #f5f5f5;
+            padding: 12px 16px;
+            border-radius: 4px;
+            margin-bottom: 16px;
+        }
+        .rule-basic-info .form-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .rule-basic-info .form-row:last-child {
+            margin-bottom: 0;
+        }
+        .rule-basic-info label {
+            width: 80px;
+            font-size: 12px;
+            color: #666;
+            flex-shrink: 0;
+        }
+        .rule-input, .rule-select, .rule-textarea {
+            flex: 1;
+            padding: 4px 8px;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+            font-size: 12px;
+            font-family: inherit;
+        }
+        .rule-textarea {
+            resize: vertical;
+        }
+
+        /* ===== 步骤流 ===== */
+        .step-flow-container {
+            margin-bottom: 16px;
+        }
+        .step-flow-title {
+            margin: 0 0 12px 0;
+            font-size: 14px;
+            color: #333;
+        }
+        .step-flow-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .step-box {
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 10px;
+            min-width: 200px;
+            max-width: 280px;
+            background: #fafafa;
+            cursor: pointer;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .step-box:hover {
+            border-color: #aaa;
+        }
+        .step-box.current-step {
+            border-color: #4a90e2;
+            box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.2);
+            background: #f0f7ff;
+        }
+        .step-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid #eee;
+        }
+        .step-name {
+            font-weight: 600;
+            font-size: 13px;
+            color: #333;
+        }
+        .step-delete-btn {
+            font-size: 12px;
+            color: #ccc;
+            cursor: pointer;
+        }
+        .step-delete-btn:hover {
+            color: #e74c3c;
+        }
+        .step-items {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .step-actions {
+            margin-top: 12px;
+        }
+        .step-item-actions-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px;
+            background: #f0f7ff;
+            border-radius: 4px;
+            margin-top: 12px;
+        }
+        .step-item-actions-label {
+            font-size: 12px;
+            color: #666;
+        }
+
+        /* ===== 步骤组件卡片 ===== */
+        .step-item-card {
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            background: #fff;
+            overflow: hidden;
+        }
+        .step-item-card-header {
+            padding: 6px 10px;
+            background: #f0f0f0;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .step-item-card-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #555;
+        }
+        .step-item-card-body {
+            padding: 8px 10px;
+        }
+        .step-item-field {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+        .step-item-field:last-child {
+            margin-bottom: 0;
+        }
+        .step-item-field label {
+            color: #888;
+        }
+        .step-item-field span {
+            color: #333;
+            max-width: 120px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .step-item-formula {
+            font-family: monospace;
+            background: #f5f5f5;
+            padding: 1px 4px;
+            border-radius: 2px;
+        }
+        .step-item-card-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            padding: 4px 10px;
+            border-top: 1px solid #f0f0f0;
+        }
+        .step-item-edit-btn, .step-item-delete-btn {
+            font-size: 11px;
+            color: #bbb;
+            cursor: pointer;
+        }
+        .step-item-edit-btn:hover {
+            color: #4a90e2;
+        }
+        .step-item-delete-btn:hover {
+            color: #e74c3c;
+        }
+
+        /* ===== 原有表单样式 ===== */
+        .form-row {
+            margin-bottom: 8px;
+        }
+        .form-row label {
+            display: inline-block;
+            width: 120px;
+        }
+    </style>
+
+    <!-- 原有触发源/输出配置 -->
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> 名称</label>
+        <input type="text" id="node-input-name" placeholder="规则引擎">
+    </div>
+    <div class="form-row" id="ruleConfig-row">
+        <label for="node-input-ruleConfig"><i class="fa fa-cloud"></i> 云端配置</label>
+        <input type="text" id="node-input-ruleConfig">
+    </div>
+    <div class="form-row">
+        <label for="node-input-triggerSource"><i class="fa fa-bolt"></i> 触发源</label>
+        <select id="node-input-triggerSource" style="width:70%">
+            <option value="msg">msg 消息流入</option>
+            <option value="mqtt">MQTT 订阅</option>
+            <option value="cloud">云端下发关联</option>
+            <option value="link">link in 节点</option>
+            <option value="all">全部（msg + mqtt + cloud + link）</option>
+        </select>
+    </div>
+    <div class="form-row" id="triggerTopic-row">
+        <label for="node-input-triggerTopic"><i class="fa fa-rss"></i> 触发主题</label>
+        <input type="text" id="node-input-triggerTopic" placeholder="device/data/#">
+    </div>
+    <div class="form-row">
+        <label for="node-input-outputMode"><i class="fa fa-sign-out"></i> 输出方式</label>
+        <select id="node-input-outputMode" style="width:70%">
+            <option value="msg">msg 标准输出</option>
+            <option value="mqtt">MQTT 发布</option>
+            <option value="cloud">云端下发关联</option>
+            <option value="link">link out 输出</option>
+            <option value="http">HTTP 请求</option>
+            <option value="all">全部（msg + mqtt + cloud + http + link）</option>
+        </select>
+    </div>
+    <div class="form-row" id="outputTopic-row">
+        <label for="node-input-outputTopic"><i class="fa fa-upload"></i> 输出主题</label>
+        <input type="text" id="node-input-outputTopic" placeholder="device/control">
+    </div>
+    <div class="form-row" id="httpUrl-row">
+        <label for="node-input-httpUrl"><i class="fa fa-globe"></i> HTTP 地址</label>
+        <input type="text" id="node-input-httpUrl" placeholder="http://api.example.com/alarm">
+    </div>
+    <div class="form-row" id="httpMethod-row">
+        <label for="node-input-httpMethod"><i class="fa fa-code"></i> HTTP 方法</label>
+        <select id="node-input-httpMethod" style="width:70%">
+            <option value="POST">POST</option>
+            <option value="GET">GET</option>
+            <option value="PUT">PUT</option>
+        </select>
+    </div>
+    <div class="form-row" id="httpHeaders-row">
+        <label for="node-input-httpHeaders"><i class="fa fa-header"></i> HTTP 请求头</label>
+        <input type="text" id="node-input-httpHeaders" placeholder='{"Authorization":"Bearer xxx"}'>
+    </div>
+
+    <!-- 规则可视化编辑器 -->
+    <div class="form-row" style="margin-top: 16px;">
+        <label><i class="fa fa-sitemap"></i> 规则配置</label>
+    </div>
+    <div class="rule-editor-container">
+        <div class="rule-editor-sidebar">
+            <div class="rule-editor-sidebar-header">
+                <h4>规则列表</h4>
+                <button class="red-ui-button red-ui-button-small" id="btn-add-rule" title="添加规则">
+                    <i class="fa fa-plus"></i>
+                </button>
+            </div>
+            <div class="rule-editor-sidebar-body" id="rule-list-container">
+                <!-- 规则列表动态渲染 -->
+            </div>
+        </div>
+        <div class="rule-editor-main" id="rule-detail-container">
+            <!-- 规则详情动态渲染 -->
+            <div class="rule-empty-tip">请从左侧添加或选择一个规则进行编辑</div>
+        </div>
+    </div>
+</script>
+
+<script type="text/x-red" data-help-name="rule-energy">
+    <p>智能规则引擎执行节点，支持逻辑告警规则与联动控制规则的实时执行。</p>
+
+    <h3>触发源</h3>
+    <table class="node-info">
+        <tr><th>类型</th><th>说明</th></tr>
+        <tr><td>msg</td><td>接收上游节点流入的标准 msg 消息</td></tr>
+        <tr><td>mqtt</td><td>通过关联的 rule-config 订阅指定 MQTT 主题</td></tr>
+        <tr><td>cloud</td><td>等待云端下发触发源关联配置后自动订阅</td></tr>
+        <tr><td>link</td><td>接收 link in 节点连入的消息</td></tr>
+        <tr><td>all</td><td>同时响应 msg、mqtt 和 link 触发</td></tr>
+    </table>
+
+    <h3>输出方式</h3>
+    <table class="node-info">
+        <tr><th>类型</th><th>说明</th></tr>
+        <tr><td>msg</td><td>标准 msg 输出到下游节点</td></tr>
+        <tr><td>mqtt</td><td>通过 rule-config 发布到指定 MQTT 主题</td></tr>
+        <tr><td>http</td><td>发送 HTTP 请求到外部系统</td></tr>
+        <tr><td>link</td><td>输出 msg 供 link out 节点使用</td></tr>
+    </table>
+
+    <h3>规则配置</h3>
+    <p>在节点配置界面中，可以通过可视化编辑器创建和管理规则：</p>
+    <ul>
+        <li><b>规则列表</b>：左侧显示所有规则，支持添加、复制、删除</li>
+        <li><b>规则基本信息</b>：名称、类型（逻辑告警/联动控制）、告警等级、描述</li>
+        <li><b>步骤流</b>：每个规则由多个步骤组成，每个步骤包含多个组件</li>
+        <li><b>组件类型</b>：数据源(type=4)、生效时间(type=5)、判断条件(type=6)、控制(type=7)、告警(type=8)</li>
+    </ul>
+
+    <h3>触发数据格式</h3>
+    <p>msg.payload 需包含以下字段用于规则匹配：</p>
+    <pre>{
+  "subsystemId": "HVAC",
+  "equipTypeId": "chiller",
+  "pointTypeId": "temp",
+  "deviceId": "DEV001",
+  "value": 32.5
+}</pre>
+
+    <h3>输出数据格式</h3>
+    <pre>{
+  "type": "alarm",
+  "ruleId": 1001,
+  "ruleName": "高温告警",
+  "ruleType": "logical",
+  "deviceId": "DEV001",
+  "alarmLevel": "1",
+  "alarmDesc": "温度超过阈值"
+}</pre>
+</script>
