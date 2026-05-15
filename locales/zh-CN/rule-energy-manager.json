@@ -1,0 +1,12 @@
+{
+  "rule-energy-manager": {
+    "label": {
+      "category": "边缘计算",
+      "name": "规则管理",
+      "projectCard": "项目标识"
+    },
+    "tip": {
+      "projectCard": "项目唯一标识，manager 和 engine 节点需配置相同值以共享缓存"
+    }
+  }
+}

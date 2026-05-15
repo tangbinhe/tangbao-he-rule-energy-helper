@@ -1,0 +1,192 @@
+[
+  {
+    "id": "tab_rule_energy_demo",
+    "type": "tab",
+    "label": "边缘规则引擎示例",
+    "disabled": false,
+    "info": "演示边缘规则引擎的完整流程：配置下发 → 点值上报 → 规则执行 → 输出控制/告警"
+  },
+  {
+    "id": "inject_rule_config",
+    "type": "inject",
+    "z": "tab_rule_energy_demo",
+    "name": "① 下发规则配置",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "payload": "{\"messageContent\":{\"detail\":[{\"projectCard\":\"L-DLLH-DLKDT01\",\"edgeRuleInfo\":\"{\\\"chainName\\\":\\\"chain45\\\",\\\"effectTimeName\\\":\\\"营业时间\\\",\\\"elData\\\":\\\"<chain>IF(effectiveTimeCmp,IF(deviceCalculateCmp,controlCmp))</chain>\\\",\\\"ruleId\\\":64,\\\"rulePointTypes\\\":[{\\\"dataType\\\":\\\"in\\\",\\\"pointTypeId\\\":1111101101,\\\"stepId\\\":556},{\\\"dataType\\\":\\\"control\\\",\\\"pointTypeId\\\":1111101104,\\\"stepId\\\":557}],\\\"ruleSource\\\":\\\"control\\\",\\\"ruleType\\\":\\\"1\\\",\\\"scripts\\\":[{\\\"function\\\":\\\"EMPTY\\\",\\\"id\\\":555,\\\"stepIndex\\\":1,\\\"stepType\\\":\\\"0\\\"},{\\\"delay\\\":10,\\\"function\\\":\\\"{1111101101}==0\\\",\\\"id\\\":556,\\\"stepIndex\\\":2,\\\"stepType\\\":\\\"1\\\"},{\\\"function\\\":\\\"1\\\",\\\"id\\\":557,\\\"stepIndex\\\":3,\\\"stepType\\\":\\\"3\\\"}]}\",\"edgeEquipPointInfos\":\"[{\\\"equipId\\\":\\\"L-DLLH-DLKDT01_DLKDT01-0005\\\",\\\"pointId\\\":\\\"TC1ETExILURMS0RUMDFfRExLRFQwMS0wMDA1XzExMTExMDExMDE=\\\",\\\"pointTypeId\\\":1111101101,\\\"slotPath\\\":\\\"/Drivers/水泵07/points/On/Off_Status\\\",\\\"valueType\\\":\\\"BOOL\\\"},{\\\"equipId\\\":\\\"L-DLLH-DLKDT01_DLKDT01-0005\\\",\\\"pointId\\\":\\\"TC1ETExILURMS0RUMDFfRExLRFQwMS0wMDA1XzExMTExMDExMDQ=\\\",\\\"pointTypeId\\\":1111101104,\\\"slotPath\\\":\\\"/Drivers/水泵07/points/control\\\",\\\"valueType\\\":\\\"BOOL\\\"}]\",\"pubFlag\":true,\"rulePubType\":\"ruleAndPointInfo\"}]},\"messageId\":\"demo-msg-001\",\"topic\":\"/cmd/set/request\"}",
+    "payloadType": "json",
+    "x": 150,
+    "y": 100,
+    "wires": [
+      [
+        "manager_node"
+      ]
+    ]
+  },
+  {
+    "id": "inject_time_config",
+    "type": "inject",
+    "z": "tab_rule_energy_demo",
+    "name": "② 下发时间配置",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "payload": "{\"messageContent\":{\"detail\":[{\"projectCard\":\"L-DLLH-DLKDT01\",\"edgeRelativeTimeList\":\"[{\\\"begin\\\":\\\"00:00:00\\\",\\\"end\\\":\\\"23:59:59\\\",\\\"timeName\\\":\\\"营业时间\\\",\\\"timeType\\\":\\\"2\\\"}]\",\"rulePubType\":\"edgeRelativeTime\"}]},\"messageId\":\"demo-msg-002\"}",
+    "payloadType": "json",
+    "x": 150,
+    "y": 160,
+    "wires": [
+      [
+        "manager_node"
+      ]
+    ]
+  },
+  {
+    "id": "inject_mapping_config",
+    "type": "inject",
+    "z": "tab_rule_energy_demo",
+    "name": "③ 下发点类型映射",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "payload": "{\"messageContent\":{\"detail\":[{\"projectCard\":\"L-DLLH-DLKDT01\",\"pointTypeRuleMappingList\":\"[{\\\"chainIds\\\":[\\\"chain45\\\"],\\\"pointTypeId\\\":1111101101},{\\\"chainIds\\\":[\\\"chain45\\\"],\\\"pointTypeId\\\":1111101104}]\",\"rulePubType\":\"pointTypeRuleMapping\"}]},\"messageId\":\"demo-msg-003\"}",
+    "payloadType": "json",
+    "x": 150,
+    "y": 220,
+    "wires": [
+      [
+        "manager_node"
+      ]
+    ]
+  },
+  {
+    "id": "manager_node",
+    "type": "rule-energy-manager",
+    "z": "tab_rule_energy_demo",
+    "name": "规则管理",
+    "projectCard": "L-DLLH-DLKDT01",
+    "x": 400,
+    "y": 160,
+    "wires": [
+      [
+        "debug_manager_out"
+      ]
+    ]
+  },
+  {
+    "id": "debug_manager_out",
+    "type": "debug",
+    "z": "tab_rule_energy_demo",
+    "name": "Manager 输出",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 620,
+    "y": 160,
+    "wires": []
+  },
+  {
+    "id": "inject_point_value",
+    "type": "inject",
+    "z": "tab_rule_energy_demo",
+    "name": "④ 点值上报（触发规则）",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "payload": "{\"pointId\":\"TC1ETExILURMS0RUMDFfRExLRFQwMS0wMDA1XzExMTExMDExMDE=\",\"slotPath\":\"/Drivers/水泵07/points/On/Off_Status\",\"value\":\"0\"}",
+    "payloadType": "json",
+    "x": 150,
+    "y": 340,
+    "wires": [
+      [
+        "engine_node"
+      ]
+    ]
+  },
+  {
+    "id": "engine_node",
+    "type": "rule-energy-engine",
+    "z": "tab_rule_energy_demo",
+    "name": "规则引擎",
+    "projectCard": "L-DLLH-DLKDT01",
+    "batchTriggerMode": "once",
+    "x": 400,
+    "y": 340,
+    "wires": [
+      [
+        "debug_engine_out"
+      ]
+    ]
+  },
+  {
+    "id": "debug_engine_out",
+    "type": "debug",
+    "z": "tab_rule_energy_demo",
+    "name": "Engine 输出",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 620,
+    "y": 340,
+    "wires": []
+  },
+  {
+    "id": "comment1",
+    "type": "comment",
+    "z": "tab_rule_energy_demo",
+    "name": "【第一步】配置下发",
+    "info": "依次点击 ①②③ 注入节点，向规则管理节点下发规则、时间配置和点类型映射。",
+    "x": 150,
+    "y": 60,
+    "wires": []
+  },
+  {
+    "id": "comment2",
+    "type": "comment",
+    "z": "tab_rule_energy_demo",
+    "name": "【第二步】点值上报与执行",
+    "info": "点击 ④ 注入节点模拟点值上报。规则引擎会根据映射找到关联规则，执行规则链，输出控制/告警/恢复消息。",
+    "x": 170,
+    "y": 300,
+    "wires": []
+  }
+]

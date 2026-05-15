@@ -1,13 +1,12 @@
 {
     "name": "tangbao-he-rule-energy-helper",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "智能规则引擎 Node-RED 节点，支持逻辑告警规则与联动控制规则的云端下发、本地执行",
     "keywords": [
         "node-red",
         "rule-engine",
         "alarm",
         "linkage",
-        "mqtt",
         "iot"
     ],
     "homepage": "https://github.com/tangbinhe/tangbao-he-rule-energy-helper#readme",
@@ -19,9 +18,12 @@
         "url": "git+https://github.com/tangbinhe/tangbao-he-rule-energy-helper.git"
     },
     "license": "MIT",
-    "author": "tangbao-he <tbhwangyi@gmail.com>",
+    "author": {
+        "name": "tangbao-he",
+        "email": "tbhwangyi@gmail.com"
+    },
     "type": "commonjs",
-    "main": "rule-config.js",
+    "main": "rule-manager.js",
     "directories": {
         "example": "examples",
         "lib": "lib",
@@ -30,10 +32,7 @@
     "scripts": {
         "test": "mocha test/**/*_spec.js"
     },
-    "dependencies": {
-        "mqtt": "^5.15.1",
-        "expr-eval": "^2.0.2"
-    },
+    "dependencies": {},
     "devDependencies": {
         "mocha": "^10.2.0",
         "should": "^13.2.3"
@@ -44,8 +43,8 @@
     "node-red": {
         "version": ">=4.0.0",
         "nodes": {
-            "rule-energy-config": "rule-config.js",
-            "rule-energy": "rule-engine.js"
+            "rule-energy-manager": "rule-manager.js",
+            "rule-energy-engine": "rule-engine.js"
         }
     }
 }

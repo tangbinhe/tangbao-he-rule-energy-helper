@@ -1,172 +1,192 @@
 # tangbao-he-rule-energy-helper
 
-智能规则引擎 Node-RED 节点，支持逻辑告警规则与联动控制规则的云端下发、本地缓存与实时执行。
+智能规则引擎 Node-RED 节点集，支持云端规则下发、本地缓存、实时执行与可视化规则管理。
 
 ## 功能特性
 
-- **云端规则同步**：通过 MQTT 接收云端下发的规则配置，支持热更新
-- **多触发源**：支持 msg 流入、MQTT 订阅、云端下发关联、link in 节点触发、全部
-- **多输出方式**：支持 msg 输出、MQTT 发布、云端下发关联、link out 输出、HTTP 请求
-- **规则缓存**：本地 JSON 持久化，防止 Node-RED 重启丢失
-- **并行执行**：多条规则同时命中时全部并行执行
-- **步骤流引擎**：支持数据源、生效时间、判断条件、控制、告警等组件
-- **安全表达式**：基于 expr-eval 实现公式计算，拒绝 eval
+- **云端规则同步**：通过 MQTT 接收云端下发的规则配置、生效时间、点类型映射，支持热更新
+- **规则本地缓存**：规则、时间配置、点类型映射持久化到本地 JSON，Node-RED 重启不丢失
+- **点值实时触发**：接收边缘端点值上报，自动匹配关联规则并执行规则链
+- **可视化规则管理**：双击 `rule-energy-manager` 节点即可查看、删除当前所有规则、时间配置和映射
+- **规则链引擎**：支持生效时间判断、设备条件计算、控制输出、告警输出、告警恢复
+- **安全表达式**：基于 AST 解析实现公式计算，拒绝 eval
+- **延迟执行支持**：设备条件支持延迟判断，满足延时后才触发后续动作
+- **告警状态管理**：告警触发后自动缓存状态，条件恢复时自动输出恢复消息
 
 ## 安装
 
 ```bash
 cd ~/.node-red
-npm install /Users/hetangbin/Downloads/tangbao-he-rule-energy-helper
+npm install tangbao-he-rule-energy-helper
 ```
 
-或全局安装后链接：
+或本地安装：
 
 ```bash
-cd /Users/hetangbin/Downloads/tangbao-he-rule-energy-helper
-npm link
 cd ~/.node-red
-npm link tangbao-he-rule-energy-helper
+npm install /path/to/tangbao-he-rule-energy-helper
 ```
 
 ## 节点说明
 
-### rule-energy-config（云端规则配置）
+### rule-energy-manager（规则管理）
 
-配置 MQTT 连接，接收云端下发的规则、触发源关联和输出配置。
+接收云端下发的配置报文，解析并持久化到本地缓存。支持在节点编辑面板中可视化查看和管理规则。
 
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| MQTT Broker | MQTT 服务器地址 | localhost |
-| 端口 | MQTT 端口 | 1883 |
-| 用户名/密码 | MQTT 认证信息 | - |
-| Client ID | MQTT 客户端标识 | 自动生成 |
-| 规则下发主题 | 接收规则配置的 MQTT 主题 | cloud/rules/down |
-| 触发源下发主题 | 接收触发源关联配置 | cloud/trigger/down |
-| 输出配置下发主题 | 接收输出配置 | cloud/output/down |
-| 状态上报主题 | 向云端上报状态 | cloud/status/up |
+**云端下发报文格式**：
 
-### rule-energy（规则执行引擎）
+```json
+{
+  "messageContent": {
+    "detail": [
+      {
+        "rulePubType": "ruleAndPointInfo",
+        "edgeRuleInfo": "{...}",
+        "edgeEquipPointInfos": "[...]"
+      },
+      {
+        "rulePubType": "edgeRelativeTime",
+        "edgeRelativeTimeList": "[...]"
+      },
+      {
+        "rulePubType": "pointTypeRuleMapping",
+        "pointTypeRuleMappingList": "[...]"
+      }
+    ]
+  }
+}
+```
 
-接收触发数据，匹配规则并执行。支持在节点配置界面中通过可视化编辑器创建和管理本地规则。
+**支持的 rulePubType**：
 
-| 参数 | 说明 |
+| 类型 | 说明 |
 |------|------|
-| 云端配置 | 关联的 rule-energy-config 节点（触发源或输出方式含 mqtt/cloud 时必填） |
-| 触发源 | msg / mqtt / cloud / link / all |
-| 触发主题 | MQTT 订阅主题（触发源为 mqtt/cloud/all 时必填） |
-| 输出方式 | msg / mqtt / cloud / link / http / all |
-| 输出主题 | MQTT 发布主题（输出方式为 mqtt/all 时必填） |
-| HTTP 地址 | HTTP 输出目标地址（输出方式为 http/all 时必填） |
+| `ruleAndPointInfo` | 创建/更新规则及点位信息 |
+| `edgeRelativeTime` | 生效时间配置 |
+| `pointTypeRuleMapping` | 点类型与规则映射 |
+| `deleteRule` | 删除规则 |
+
+**可视化面板功能**：
+
+- 查看当前规则列表（规则链、ID、类型、来源、生效时间）
+- 查看生效时间配置（名称、类型、时间段）
+- 查看点类型规则映射（点类型ID → 关联规则链）
+- 查看规则/时间配置 JSON 详情
+- 删除规则/时间配置/映射（带二次确认）
+
+### rule-energy-engine（规则执行引擎）
+
+接收点值上报，匹配规则，执行规则链，输出控制/告警/恢复消息。
+
+**输入数据格式**：
+
+```json
+{
+  "pointId": "TC1ETExILURMS0RUMDFfRExLRFQwMS0wMDA1XzExMTExMDExMDE=",
+  "slotPath": "/Drivers/水泵07/points/On/Off_Status",
+  "value": 0
+}
+```
+
+**输出数据格式**：
+
+```json
+// 控制输出
+{
+  "type": "control",
+  "chainName": "chain45",
+  "ruleId": 64,
+  "pointTypeId": 1111101104,
+  "value": "1"
+}
+
+// 告警输出
+{
+  "type": "alarm",
+  "chainName": "chain45",
+  "ruleId": 64,
+  "pointId": "...",
+  "slotPath": "...",
+  "pointTypeId": 1111101101,
+  "priority": "1",
+  "alarmValue": "100",
+  "alarmTime": 1778815454123
+}
+
+// 告警恢复
+{
+  "type": "alarmRecovery",
+  "chainName": "chain45",
+  "ruleId": 64,
+  "pointId": "...",
+  "slotPath": "...",
+  "pointTypeId": 1111101101,
+  "normalTime": 1778815454123
+}
+```
+
+## 规则链执行流程
+
+```
+点值上报 → 反查 pointTypeId → 查映射找到关联规则 → 加载规则链
+    → 生效时间判断 (effectiveTimeCmp)
+        → 设备条件计算 (deviceCalculateCmp) [支持延迟]
+            → 控制输出 (controlCmp) / 告警输出 (alarmCmp)
+```
 
 ## 规则数据结构
 
-规则采用步骤流结构，与前端项目 `qd-ibms-web` 中的逻辑告警/联动控制规则格式保持一致：
-
 ```json
 {
-  "id": 1001,
-  "ruleName": "高温告警",
-  "ruleStatus": "1",
-  "ruleType": "logical",
-  "subsystemId": "HVAC",
-  "partList": [
-    {
-      "stepIndex": 1,
-      "ruleName": "步骤1",
-      "partList": [
-        { "type": "4", "ruleName": "A", "subsystemId": "HVAC", "equipTypeId": "chiller", "pointTypeId": "temp" },
-        { "type": "5", "effectDateName": "工作日", "effectTimeName": "08:00-18:00" },
-        { "type": "6", "functionType": "0", "function": "1", "delay": "5", "delayType": 0 },
-        { "type": "8", "equipTypeId": "chiller", "pointTypeId": "alarm", "alarmLevel": "1", "alarmDesc": "温度过高" }
-      ]
-    }
+  "chainName": "chain45",
+  "ruleId": 64,
+  "ruleType": "1",
+  "ruleSource": "control",
+  "effectTimeName": "营业时间",
+  "elData": "<chain>IF(effectiveTimeCmp,IF(deviceCalculateCmp,controlCmp))</chain>",
+  "scripts": [
+    { "stepIndex": 1, "stepType": "0", "function": "EMPTY" },
+    { "stepIndex": 2, "stepType": "1", "function": "{1111101101}==0", "delay": 10 },
+    { "stepIndex": 3, "stepType": "3", "function": "1" }
+  ],
+  "rulePointTypes": [
+    { "dataType": "in", "pointTypeId": 1111101101 },
+    { "dataType": "control", "pointTypeId": 1111101104 }
+  ],
+  "equipPoints": [
+    { "equipId": "...", "pointId": "...", "pointTypeId": 1111101101, "slotPath": "..." }
   ]
 }
 ```
 
-### 组件类型说明
+## HTTP Admin API
 
-| type | 组件 | 说明 |
+模块运行时提供以下 REST API（供节点编辑面板使用）：
+
+| 方法 | 路径 | 说明 |
 |------|------|------|
-| 4 | 数据源 | 定义数据来源（子系统/设备类型/点位类型） |
-| 5 | 生效时间 | 日期与时间段限制 |
-| 6 | 判断条件 | 状态判断或公式计算，支持延时 |
-| 7 | 控制 | 联动控制输出（设定值） |
-| 8 | 告警 | 告警输出（告警等级/描述） |
+| GET | `/rule-energy-manager/:id/rules` | 获取所有规则摘要 |
+| GET | `/rule-energy-manager/:id/rule/:chainName` | 获取单条规则详情 |
+| DELETE | `/rule-energy-manager/:id/rule/:chainName` | 删除规则 |
+| GET | `/rule-energy-manager/:id/times` | 获取所有时间配置 |
+| GET | `/rule-energy-manager/:id/time/:timeName` | 获取单条时间配置 |
+| DELETE | `/rule-energy-manager/:id/time/:timeName` | 删除时间配置 |
+| GET | `/rule-energy-manager/:id/mappings` | 获取所有点类型映射 |
+| DELETE | `/rule-energy-manager/:id/mapping/:pointTypeId` | 删除映射 |
+| GET | `/rule-energy-manager/:id/status` | 获取缓存状态统计 |
 
-## 触发数据格式
+## 缓存文件位置
 
-流入 msg.payload 或 MQTT 消息中的触发数据需包含：
+缓存文件存储在 `~/.node-red/rule-cache/` 目录下：
 
-```json
-{
-  "subsystemId": "HVAC",
-  "equipTypeId": "chiller",
-  "pointTypeId": "temp",
-  "deviceId": "DEV001",
-  "value": 32.5
-}
-```
-
-## 输出数据格式
-
-```json
-{
-  "type": "alarm",
-  "ruleId": 1001,
-  "ruleName": "高温告警",
-  "ruleType": "logical",
-  "deviceId": "DEV001",
-  "alarmLevel": "1",
-  "alarmDesc": "温度过高"
-}
-```
-
-## 云端 MQTT 下发格式
-
-### 批量下发规则
-
-```json
-{
-  "type": "batch",
-  "rules": [
-    { "id": 1001, "ruleName": "规则1", ... },
-    { "id": 1002, "ruleName": "规则2", ... }
-  ]
-}
-```
-
-### 删除规则
-
-```json
-{
-  "type": "delete",
-  "ruleId": 1001
-}
-```
-
-### 单条更新
-
-```json
-{
-  "id": 1001,
-  "ruleName": "规则1",
-  "ruleStatus": "1",
-  "partList": [...]
-}
-```
+- `rules.json` — 规则缓存
+- `times.json` — 时间配置缓存
+- `mappings.json` — 点类型映射缓存
+- `delays.json` — 延迟状态缓存
 
 ## 示例流
 
 见 `examples/` 目录下的示例文件。
-
-## HTTP Admin API
-
-模块运行时提供以下 REST API：
-
-- `GET /rule-energy-config/{nodeId}/rules` — 获取当前缓存的所有规则
-- `POST /rule-energy-config/{nodeId}/rules` — 手动添加/更新规则
-- `DELETE /rule-energy-config/{nodeId}/rules/{ruleId}` — 删除规则
 
 ## 开发
 

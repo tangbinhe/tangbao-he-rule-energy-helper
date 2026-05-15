@@ -1,288 +1,292 @@
+/**
+ * 规则执行节点
+ * 接收点值上报，匹配规则，执行规则链，输出控制/告警/恢复消息
+ * 项目独立部署，使用单例缓存，无需 projectCard 配置
+ */
+
 module.exports = function(RED) {
-    "use strict";
-    var RuleMatcher = require('./lib/rule-matcher');
-    var RuleExecutor = require('./lib/rule-executor');
-    var http = require('http');
-    var https = require('https');
-    var url = require('url');
+  const { parseChain, evaluateAst } = require('./lib/engine/chain-parser');
+  const { effectiveTimeCmp } = require('./lib/engine/effective-time-cmp');
+  const { deviceCalculateCmp } = require('./lib/engine/device-calculate-cmp');
+  const { controlCmp } = require('./lib/engine/control-cmp');
+  const { alarmCmp } = require('./lib/engine/alarm-cmp');
+  const DelayManager = require('./lib/engine/delay-manager');
+  const RuleCache = require('./lib/cache/rule-cache');
+  const TimeCache = require('./lib/cache/time-cache');
+  const MappingCache = require('./lib/cache/mapping-cache');
 
-    function RuleEngineNode(config) {
-        RED.nodes.createNode(this, config);
-        var node = this;
+  function RuleEnergyEngineNode(config) {
+    RED.nodes.createNode(this, config);
+    const node = this;
 
-        node.triggerSource = config.triggerSource || 'msg';
-        node.triggerTopic = config.triggerTopic || '';
-        node.outputMode = config.outputMode || 'msg';
-        node.outputTopic = config.outputTopic || '';
-        node.httpUrl = config.httpUrl || '';
-        node.httpMethod = (config.httpMethod || 'POST').toUpperCase();
-        node.httpHeaders = config.httpHeaders || '{}';
+    node.name = config.name;
+    node.batchTriggerMode = config.batchTriggerMode || 'once';
 
-        // 判断是否需要 MQTT 配置
-        var needMqtt = (node.triggerSource === 'mqtt' || node.triggerSource === 'cloud' ||
-                        node.triggerSource === 'all' || node.outputMode === 'mqtt' ||
-                        node.outputMode === 'cloud' || node.outputMode === 'all');
+    const log = function(msgStr) {
+      node.log(msgStr);
+    };
 
-        node.ruleConfig = RED.nodes.getNode(config.ruleConfig);
-        if (needMqtt && !node.ruleConfig) {
-            node.error('未关联 rule-energy-config 配置节点，请先创建并关联');
-            node.status({ fill: 'red', shape: 'ring', text: '未关联配置' });
-            return;
+    // 单例缓存（项目独立部署，无需隔离）
+    node.ruleCache = new RuleCache(log);
+    node.timeCache = new TimeCache(log);
+    node.mappingCache = new MappingCache(log);
+    node.delayManager = new DelayManager(log);
+
+    // 告警状态缓存（Map 实例）
+    node.alarmStateCache = new Map();
+    // 缓存解析后的 AST（key: chainName）
+    node.astCache = new Map();
+
+    node.on('input', function(msg) {
+      log(`[rule-energy-engine][${node.id}] 收到点值上报`);
+
+      try {
+        // 规范化点值数据（支持单条或批量）
+        let points = [];
+        if (Array.isArray(msg.payload)) {
+          points = msg.payload;
+          log(`[rule-energy-engine][${node.id}] 批量点值, 共 ${points.length} 个点`);
+        } else if (msg.payload && typeof msg.payload === 'object') {
+          points = [msg.payload];
+          log(`[rule-energy-engine][${node.id}] 单条点值`);
+        } else {
+          log(`[rule-energy-engine][${node.id}] 无效的 payload 格式`);
+          return;
         }
 
-        // 解析节点本地配置的规则
-        node.localRules = [];
-        try {
-            node.localRules = JSON.parse(config.rules || '[]');
-        } catch(e) {
-            node.localRules = [];
+        // 收集所有需要触发的规则
+        const chainIdsToTrigger = new Set();
+        const pointValues = {};  // pointTypeId -> { pointId, slotPath, value }
+
+        for (let i = 0; i < points.length; i++) {
+          const point = points[i];
+          if (!point || typeof point !== 'object') {
+            log(`[rule-energy-engine][${node.id}] 点[${i}] 格式无效, 跳过`);
+            continue;
+          }
+
+          log(`[rule-energy-engine][${node.id}] 点[${i}] pointId=${point.pointId || 'none'}, slotPath=${point.slotPath || 'none'}, value=${point.value}`);
+
+          // 反查 pointTypeId（先通过 pointId，再通过 slotPath）
+          let pointTypeId = null;
+          if (point.pointId) {
+            pointTypeId = node.ruleCache.findPointTypeIdByPointId(point.pointId);
+          }
+          if (!pointTypeId && point.slotPath) {
+            pointTypeId = node.ruleCache.findPointTypeIdBySlotPath(point.slotPath);
+          }
+
+          if (!pointTypeId) {
+            log(`[rule-energy-engine][${node.id}] 点 ${point.pointId || point.slotPath} 反查 pointTypeId 未找到, 跳过`);
+            continue;
+          }
+
+          log(`[rule-energy-engine][${node.id}] 点 ${point.pointId || point.slotPath} 反查 pointTypeId=${pointTypeId}`);
+
+          pointValues[pointTypeId] = {
+            pointId: point.pointId,
+            slotPath: point.slotPath,
+            value: point.value,
+            pointTypeId: pointTypeId
+          };
+
+          // 查映射缓存
+          const chainIds = node.mappingCache.get(pointTypeId);
+          if (chainIds && chainIds.length > 0) {
+            log(`[rule-energy-engine][${node.id}] pointTypeId=${pointTypeId} 关联规则: [${chainIds}]`);
+            chainIds.forEach(id => chainIdsToTrigger.add(id));
+          } else {
+            log(`[rule-energy-engine][${node.id}] pointTypeId=${pointTypeId} 无关联规则`);
+          }
         }
 
-        node.matcher = null;
-        node.executor = new RuleExecutor(node);
-        node.mqttHandler = null;
-
-        function initMatcher() {
-            var allRules = [];
-            // 合并云端规则
-            if (node.ruleConfig && node.ruleConfig.cache) {
-                allRules = allRules.concat(node.ruleConfig.cache.getAll());
-            }
-            // 合并本地规则
-            if (node.localRules && node.localRules.length > 0) {
-                allRules = allRules.concat(node.localRules);
-            }
-            if (allRules.length > 0) {
-                // 创建临时缓存用于匹配
-                var tempCache = {
-                    getAll: function() { return allRules; }
-                };
-                node.matcher = new RuleMatcher(tempCache);
-                node.status({ fill: 'green', shape: 'dot', text: '就绪 (' + allRules.length + ' 条规则)' });
-            } else {
-                node.status({ fill: 'yellow', shape: 'ring', text: '无规则' });
-            }
+        if (chainIdsToTrigger.size === 0) {
+          log(`[rule-energy-engine][${node.id}] 无匹配规则, 跳过`);
+          return;
         }
 
-        initMatcher();
-        if (node.ruleConfig) {
-            node.ruleConfig.on('rulesUpdated', function() {
-                initMatcher();
-                node.log('规则已更新，重新初始化匹配器');
-            });
-        }
+        log(`[rule-energy-engine][${node.id}] 本次触发规则集合: [${Array.from(chainIdsToTrigger)}]`);
 
-        // MQTT 触发订阅
-        if ((node.triggerSource === 'mqtt' || node.triggerSource === 'cloud') && node.triggerTopic) {
-            if (node.ruleConfig.client) {
-                node.ruleConfig.client.subscribe(node.triggerTopic, function(err) {
-                    if (err) {
-                        node.error('订阅触发主题失败: ' + err.message);
-                    } else {
-                        node.log('已订阅触发主题: ' + node.triggerTopic);
-                    }
-                });
+        // 执行每个触发的规则
+        const chainIds = Array.from(chainIdsToTrigger);
+        for (let i = 0; i < chainIds.length; i++) {
+          const chainId = chainIds[i];
+          // mapping 中存的是 chainId（如 "45"），规则缓存 key 是 chainName（如 "chain45"）
+          const chainName = String(chainId).startsWith('chain') ? String(chainId) : 'chain' + chainId;
+          const rule = node.ruleCache.get(chainName);
 
-                node.mqttHandler = function(topic, message) {
-                    if (topic === node.triggerTopic) {
-                        try {
-                            var payload = JSON.parse(message.toString());
-                            node.handleTrigger(payload);
-                        } catch (e) {
-                            node.error('MQTT 触发消息解析失败: ' + e.message);
-                        }
-                    }
-                };
-                node.ruleConfig.client.on('message', node.mqttHandler);
-            }
-        }
+          if (!rule) {
+            log(`[rule-energy-engine][${node.id}] 规则不存在: chainId=${chainId}, chainName=${chainName}`);
+            continue;
+          }
 
-        // Cloud 触发源关联配置
-        if (node.triggerSource === 'cloud') {
-            var cloudConfig = node.ruleConfig.getTriggerConfig(node.id);
-            if (cloudConfig && cloudConfig.topic) {
-                node.triggerTopic = cloudConfig.topic;
-                if (node.ruleConfig.client) {
-                    node.ruleConfig.client.subscribe(node.triggerTopic);
-                    node.mqttHandler = function(topic, message) {
-                        if (topic === node.triggerTopic) {
-                            try {
-                                var payload = JSON.parse(message.toString());
-                                node.handleTrigger(payload);
-                            } catch (e) {
-                                node.error('云端触发消息解析失败: ' + e.message);
-                            }
-                        }
-                    };
-                    node.ruleConfig.client.on('message', node.mqttHandler);
-                }
-            }
-        }
+          log(`[rule-energy-engine][${node.id}] 开始执行规则[${i + 1}/${chainIds.length}], chainName=${rule.chainName}, ruleId=${rule.ruleId}, ruleType=${rule.ruleType}, ruleSource=${rule.ruleSource}`);
 
-        // 输入口处理（msg / link 触发）
-        node.on('input', function(msg) {
-            if (node.triggerSource === 'msg' || node.triggerSource === 'link' || node.triggerSource === 'all') {
-                var triggerData = msg.payload || msg;
-                if (typeof triggerData === 'object') {
-                    node.handleTrigger(triggerData);
-                } else {
-                    node.warn('输入消息 payload 必须是对象，当前类型: ' + typeof triggerData);
-                }
-            }
-        });
+          // 构建 pointList（填充当前值）
+          const pointList = buildPointList(rule, pointValues, log);
+          log(`[rule-energy-engine][${node.id}] 构建 pointList, 共 ${pointList.length} 个点, 当前值: ${JSON.stringify(pointList.map(p => ({ ptid: p.pointTypeId, val: p.value })))}`);
 
-        // 提供 HTTP Admin API 获取本地规则
-        RED.httpAdmin.get('/rule-energy/:id/local-rules', function(req, res) {
+          // 解析或获取缓存的 AST
+          const astKey = rule.chainName;
+          let ast = node.astCache.get(astKey);
+          if (!ast) {
             try {
-                var n = RED.nodes.getNode(req.params.id);
-                if (!n) {
-                    res.status(404).json({ error: '节点未找到' });
-                    return;
-                }
-                res.json(n.localRules || []);
-            } catch (err) {
-                res.status(500).json({ error: err.message });
+              ast = parseChain(rule.elData, log);
+              node.astCache.set(astKey, ast);
+              log(`[rule-energy-engine][${node.id}] 解析执行链并缓存: ${rule.elData}`);
+            } catch (e) {
+              log(`[rule-energy-engine][${node.id}] 解析执行链失败: ${e.message}`);
+              continue;
             }
-        });
+          } else {
+            log(`[rule-energy-engine][${node.id}] 使用缓存的 AST`);
+          }
 
-        node.on('close', function(removed, done) {
-            if (node.mqttHandler && node.ruleConfig && node.ruleConfig.client) {
-                node.ruleConfig.client.removeListener('message', node.mqttHandler);
+          // 构建执行上下文
+          const context = {
+            rule,
+            pointList,
+            chainName: rule.chainName,
+            timeCache: node.timeCache,
+            delayManager: node.delayManager,
+            log,
+            alarmStateCache: node.alarmStateCache,
+            triggerAlarmRecovery: () => {
+              doAlarmRecovery(rule, pointList, rule.chainName, node, log, node.alarmStateCache, node.delayManager);
             }
-            if (done) done();
-        });
+          };
+
+          // 构建 cmp 函数映射
+          const cmpMap = {
+            effectiveTimeCmp: (ctx) => effectiveTimeCmp(ctx),
+            deviceCalculateCmp: (ctx) => deviceCalculateCmp(ctx),
+            controlCmp: (ctx) => controlCmp(ctx),
+            alarmCmp: (ctx) => alarmCmp(ctx)
+          };
+
+          // 执行 AST
+          log(`[rule-energy-engine][${node.id}] 开始执行 AST...`);
+          let result;
+          try {
+            result = evaluateAst(ast, context, cmpMap, log);
+          } catch (e) {
+            log(`[rule-energy-engine][${node.id}] 执行 AST 异常: ${e.message}`);
+            continue;
+          }
+
+          // 处理输出
+          let outputCount = 0;
+          if (result && result.type) {
+            log(`[rule-energy-engine][${node.id}] 规则执行完成, chainName=${rule.chainName}, 输出 type=${result.type}`);
+            node.send({ payload: result });
+            outputCount++;
+          } else if (Array.isArray(result)) {
+            for (const output of result) {
+              if (output && output.type) {
+                log(`[rule-energy-engine][${node.id}] 规则执行完成, chainName=${rule.chainName}, 输出 type=${output.type}`);
+                node.send({ payload: output });
+                outputCount++;
+              }
+            }
+          }
+
+          if (outputCount === 0) {
+            log(`[rule-energy-engine][${node.id}] 规则执行完成, chainName=${rule.chainName}, 无输出`);
+          }
+        }
+
+      } catch (e) {
+        log(`[rule-energy-engine][${node.id}] 处理点值异常: ${e.message}`);
+        node.error(e, msg);
+      }
+    });
+
+    node.on('close', function() {
+      log(`[rule-energy-engine][${node.id}] 节点关闭`);
+    });
+  }
+
+  /**
+   * 构建 pointList，填充当前点值
+   */
+  function buildPointList(rule, pointValues, log) {
+    const pointList = [];
+
+    if (!rule.rulePointTypes || !Array.isArray(rule.rulePointTypes)) {
+      return pointList;
     }
 
-    RuleEngineNode.prototype.handleTrigger = function(triggerData) {
-        var node = this;
-        if (!node.matcher) {
-            node.warn('规则匹配器未初始化，跳过执行');
-            return;
+    for (const rpt of rule.rulePointTypes) {
+      // 从 equipPoints 找到对应的点位信息
+      const equipPoint = rule.equipPoints && Array.isArray(rule.equipPoints)
+        ? rule.equipPoints.find(ep => ep.pointTypeId === rpt.pointTypeId)
+        : null;
+
+      const currentValue = pointValues[rpt.pointTypeId];
+
+      pointList.push({
+        pointTypeId: rpt.pointTypeId,
+        dataType: rpt.dataType,
+        stepId: rpt.stepId,
+        pointId: currentValue ? currentValue.pointId : (equipPoint ? equipPoint.pointId : null),
+        slotPath: currentValue ? currentValue.slotPath : (equipPoint ? equipPoint.slotPath : null),
+        value: currentValue ? currentValue.value : null,
+        equipId: equipPoint ? equipPoint.equipId : null,
+        valueType: equipPoint ? equipPoint.valueType : null
+      });
+    }
+
+    return pointList;
+  }
+
+  /**
+   * 执行告警恢复
+   */
+  function doAlarmRecovery(rule, pointList, chainName, node, log, alarmStateCache, delayManager) {
+    log(`[alarmRecovery][${chainName}] 触发告警恢复`);
+
+    // 1. 清除告警状态
+    let clearedCount = 0;
+    for (const point of pointList) {
+      if (!point.pointId) continue;
+      const alarmKey = `${chainName}:${point.pointId}`;
+      if (alarmStateCache.has(alarmKey)) {
+        alarmStateCache.delete(alarmKey);
+        clearedCount++;
+        log(`[alarmRecovery][${chainName}] 清除告警状态: pointId=${point.pointId}`);
+      }
+    }
+    if (clearedCount === 0) {
+      log(`[alarmRecovery][${chainName}] 无告警状态需要清除`);
+    }
+
+    // 2. 清除延迟状态
+    delayManager.clear(chainName);
+
+    // 3. 输出恢复消息
+    let sentCount = 0;
+    for (const point of pointList) {
+      if (!point.pointId) continue;
+      const recoveryMsg = {
+        payload: {
+          type: 'alarmRecovery',
+          chainName,
+          ruleId: rule.ruleId,
+          pointId: point.pointId,
+          slotPath: point.slotPath,
+          pointTypeId: point.pointTypeId,
+          normalTime: Date.now()
         }
+      };
+      node.send(recoveryMsg);
+      sentCount++;
+      log(`[alarmRecovery][${chainName}] 输出恢复消息: pointId=${point.pointId}`);
+    }
 
-        node.log('收到触发数据: ' + JSON.stringify(triggerData).substring(0, 200));
+    if (sentCount === 0) {
+      log(`[alarmRecovery][${chainName}] 无恢复消息输出`);
+    }
+  }
 
-        var matchedRules = node.matcher.match(triggerData);
-        node.log('触发数据匹配到 ' + matchedRules.length + ' 条规则');
-
-        if (matchedRules.length === 0) {
-            node.status({ fill: 'blue', shape: 'dot', text: '未匹配规则' });
-            return;
-        }
-
-        node.status({ fill: 'green', shape: 'dot', text: '执行 ' + matchedRules.length + ' 条规则' });
-
-        // 并行执行所有匹配规则
-        var promises = [];
-        for (var i = 0; i < matchedRules.length; i++) {
-            (function(rule) {
-                var p = node.executor.execute(rule, triggerData, function(output) {
-                    node.sendOutput(output);
-                });
-                promises.push(p);
-            })(matchedRules[i]);
-        }
-
-        Promise.all(promises).then(function() {
-            node.log('所有匹配规则执行完成');
-            var ruleCount = (node.ruleConfig && node.ruleConfig.cache) ? node.ruleConfig.cache.getAll().length : 0;
-            node.status({ fill: 'green', shape: 'dot', text: '就绪 (' + ruleCount + ' 条规则)' });
-        }).catch(function(err) {
-            node.error('规则执行异常: ' + err.message);
-            node.status({ fill: 'red', shape: 'ring', text: '执行异常' });
-        });
-    };
-
-    RuleEngineNode.prototype.sendOutput = function(output) {
-        var node = this;
-        node.log('规则输出: ' + JSON.stringify(output));
-
-        var msg = {
-            payload: output,
-            topic: output.type || 'rule-output',
-            _ruleId: output.ruleId,
-            _ruleName: output.ruleName
-        };
-
-        var mode = node.outputMode;
-
-        // msg 输出
-        if (mode === 'msg' || mode === 'all') {
-            node.send(msg);
-        }
-
-        // mqtt 输出
-        if ((mode === 'mqtt' || mode === 'all') && node.outputTopic && node.ruleConfig && node.ruleConfig.client) {
-            node.ruleConfig.publish(node.outputTopic, output);
-        }
-
-        // cloud 输出（从云端配置获取主题）
-        if (mode === 'cloud' && node.ruleConfig && node.ruleConfig.client) {
-            var cloudOutputConfig = node.ruleConfig.getOutputConfig(node.id);
-            if (cloudOutputConfig && cloudOutputConfig.topic) {
-                node.ruleConfig.publish(cloudOutputConfig.topic, output);
-            } else {
-                node.warn('云端输出配置未找到，请等待云端下发 output 配置');
-            }
-        }
-
-        // http 输出
-        if ((mode === 'http' || mode === 'all') && node.httpUrl) {
-            node.sendHttp(output);
-        }
-
-        // link out 输出（通过 msg 发送，由用户连线到 link out 节点）
-        if (mode === 'link' || mode === 'all') {
-            node.send(msg);
-        }
-    };
-
-    RuleEngineNode.prototype.sendHttp = function(output) {
-        var node = this;
-        try {
-            var parsedUrl = url.parse(node.httpUrl);
-            var isHttps = parsedUrl.protocol === 'https:';
-            var client = isHttps ? https : http;
-
-            var postData = JSON.stringify(output);
-            var headers = {
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(postData)
-            };
-
-            try {
-                var customHeaders = JSON.parse(node.httpHeaders);
-                Object.assign(headers, customHeaders);
-            } catch (e) {}
-
-            var options = {
-                hostname: parsedUrl.hostname,
-                port: parsedUrl.port || (isHttps ? 443 : 80),
-                path: parsedUrl.path,
-                method: node.httpMethod,
-                headers: headers
-            };
-
-            var req = client.request(options, function(res) {
-                var data = '';
-                res.on('data', function(chunk) { data += chunk; });
-                res.on('end', function() {
-                    node.log('HTTP 输出响应: ' + res.statusCode + ' ' + data.substring(0, 100));
-                });
-            });
-
-            req.on('error', function(err) {
-                node.error('HTTP 输出请求失败: ' + err.message);
-            });
-
-            if (node.httpMethod !== 'GET') {
-                req.write(postData);
-            }
-            req.end();
-        } catch (err) {
-            node.error('HTTP 输出异常: ' + err.message);
-        }
-    };
-
-    RED.nodes.registerType('rule-energy', RuleEngineNode);
+  RED.nodes.registerType('rule-energy-engine', RuleEnergyEngineNode);
 };

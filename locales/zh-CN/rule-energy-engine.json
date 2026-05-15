@@ -1,0 +1,14 @@
+{
+  "rule-energy-engine": {
+    "label": {
+      "category": "边缘计算",
+      "name": "规则引擎",
+      "projectCard": "项目标识",
+      "batchTriggerMode": "批量触发模式"
+    },
+    "tip": {
+      "projectCard": "项目唯一标识，manager 和 engine 节点需配置相同值以共享缓存",
+      "batchTriggerMode": "once=收集所有点后执行一次, each=每个点单独触发"
+    }
+  }
+}
