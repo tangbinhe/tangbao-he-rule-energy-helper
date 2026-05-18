@@ -15,24 +15,21 @@
 
 ```json
 {
-  "iotId": "",
-  "messageContent": {
-    "timeStamp": 1778743364523,
-    "companyId": "longfor",
-    "gatewayCode": "",
-    "cmdType": 71,
-    "count": 1,
-    "projectCard": "L-DLLH-DLKDT01",
-    "cmd": "set",
-    "detail": [
-      // 具体业务数据
-    ],
-    "version": "1.1"
-  },
-  "messageId": "8e1765ed-2301-467b-a752-e7b900d9ee51",
-  "topic": "/cmd/set/request"
+  "timeStamp": 1778743364523,
+  "companyId": "longfor",
+  "gatewayCode": "",
+  "cmdType": 71,
+  "count": 1,
+  "projectCard": "L-DLLH-DLKDT01",
+  "cmd": "set",
+  "detail": [
+    // 具体业务数据
+  ],
+  "version": "1.1"
 }
 ```
+
+> 注意：`msg.payload` 直接传入原来 `messageContent` 内的内容，`detail` 在 payload 根层级，不再有外层 `messageContent` 包装。
 
 ### 2.2 四种 rulePubType 详解
 
@@ -83,6 +80,29 @@
   }
 ]
 ```
+
+`edgeGroupEquipPointInfos`（可选，多设备配对分组）：
+
+```json
+[
+  {
+    "equipId": "L-DLLH-DLKDT01_DLKDT01-0005",
+    "pointId": "TC1ETExILURMS0RUMDFfRExLRFQwMS0wMDA1XzExMTExMDExMDE=",
+    "pointTypeId": 1111101101,
+    "slotPath": "/Drivers/水泵07/points/On/Off_Status",
+    "valueType": "BOOL",
+    "groupName": "groupA"
+  }
+]
+```
+
+> 分组点位会自动合并到 `equipPoints` 中，同时构建 `groupMapping`：
+> ```json
+> {
+>   "pointId1": { "groupA": ["pointId1", "pointId2"] },
+>   "pointId2": { "groupA": ["pointId1", "pointId2"] }
+> }
+> ```
 
 #### ② edgeRelativeTime — 时间配置
 
@@ -351,13 +371,44 @@ msg 流入 (点值上报)
     scripts: [...],
     rulePointTypes: [...],
     equipPoints: [...],
+    groupEquipPoints: [...],
+    groupMapping: {
+      "pointId1": { "groupA": ["pointId1", "pointId2"] }
+    },
+    alarmLevel: "1",
+    alarmDesc: "温度过高",
     projectCard: "L-DLLH-DLKDT01",
     updateTime: 1778743364523
   }
 }
 ```
 
-**持久化文件：** `~/.node-red/rule-cache/rules_<managerNodeId>.json`
+**内存结构详情：**
+
+```javascript
+{
+  "chain45": {
+    chainName: "chain45",
+    ruleId: 64,
+    ruleType: "1",
+    ruleSource: "control",
+    effectTimeName: "营业时间",
+    elData: "...",
+    scripts: [...],
+    rulePointTypes: [...],
+    equipPoints: [...],
+    groupEquipPoints: [...],
+    groupMapping: {
+      "pointId1": { "groupA": ["pointId1", "pointId2"] }
+    },
+    alarmLevel: "1",
+    alarmDesc: "温度过高",
+    updateTime: 1778743364523
+  }
+}
+```
+
+**持久化文件：** `~/.node-red/rule-cache/rules.json`
 
 **方法：**
 
@@ -365,8 +416,8 @@ msg 流入 (点值上报)
 - `get(chainName)` — 获取规则
 - `remove(chainName)` — 删除规则
 - `getAll()` — 获取所有规则
-- `findByPointId(pointId)` — 通过 pointId 反查规则
-- `findBySlotPath(slotPath)` — 通过 slotPath 反查 pointTypeId
+- `findPointTypeIdByPointId(pointId)` — 通过 pointId 反查 pointTypeId
+- `findPointTypeIdBySlotPath(slotPath)` — 通过 slotPath 反查 pointTypeId
 
 **日志：**
 
@@ -392,7 +443,7 @@ msg 流入 (点值上报)
 }
 ```
 
-**持久化文件：** `~/.node-red/rule-cache/times_<managerNodeId>.json`
+**持久化文件：** `~/.node-red/rule-cache/times.json`
 
 **方法：**
 
@@ -420,7 +471,7 @@ msg 流入 (点值上报)
 }
 ```
 
-**持久化文件：** `~/.node-red/rule-cache/mappings_<managerNodeId>.json`
+**持久化文件：** `~/.node-red/rule-cache/mappings.json`
 
 **方法：**
 
@@ -443,10 +494,9 @@ msg 流入 (点值上报)
 
 ```javascript
 {
-  "L-DLLH-DLKDT01:chain45:2": {
+  "chain45:2": {
     chainName: "chain45",
     stepIndex: 2,
-    projectCard: "L-DLLH-DLKDT01",
     pointId: "TC1ETExIL...",
     processTimestamp: 1778743364523,
     delay: 10,
@@ -455,7 +505,7 @@ msg 流入 (点值上报)
 }
 ```
 
-**持久化文件：** `~/.node-red/rule-cache/delays_<engineNodeId>.json`
+**持久化文件：** `~/.node-red/rule-cache/delays.json`
 
 **方法：**
 
@@ -472,6 +522,168 @@ msg 流入 (点值上报)
 - `[delay-manager] 检查延迟, key=${key}, 已过去 ${elapsed}s, 剩余 ${remain}s`
 - `[delay-manager] 延迟到期, key=${key}`
 - `[delay-manager] 清除延迟, key=${key}`
+
+---
+
+### 4.5 alarm-state-cache.js（告警状态缓存）
+
+**说明：** 告警状态缓存在 `rule-energy-engine` 节点内部，用于记录已触发的告警，防止重复告警，并为告警恢复提供原始告警消息。**已支持文件持久化**，Node-RED 重启后数据不丢失。
+
+**内存结构：**
+
+```javascript
+{
+  "chain45:TC1ETExIL...": {
+    alarmId: "uuid",
+    timestamp: 1778743364523,
+    alarmMessage: {
+      type: "alarm",
+      chainName: "chain45",
+      ruleId: 64,
+      alarmId: "uuid",
+      conditionId: "chain45_xxx",
+      alarmLevel: "1",
+      alarmDesc: "温度过高",
+      alarmStatus: "OffNormal",
+      pointId: "TC1ETExIL...",
+      slotPath: "/Drivers/水泵07/points/On/Off_Status",
+      alarmValue: "123",
+      pointTypeId: 1111101101,
+      timestamp: 1778743364523
+    }
+  }
+}
+```
+
+**Key 格式：** `${chainName}:${pointId}`
+
+**持久化文件：** `~/.node-red/rule-cache/alarm-states.json`
+
+**方法：**
+
+- `set(key, state)` — 保存告警状态
+- `get(key)` — 获取告警状态
+- `has(key)` — 检查是否存在
+- `delete(key)` — 删除告警状态
+- `getAll()` — 获取所有告警状态
+- `size()` — 获取数量
+
+**生命周期：**
+- 告警触发时写入（`alarmCmp` 中）
+- 告警恢复时读取并删除（`doAlarmRecovery` 中）
+- 节点重启后自动从文件加载
+
+---
+
+### 4.6 astCache（AST 解析缓存，rule-engine 节点内）
+
+**说明：** AST 缓存在 `rule-energy-engine` 节点内部，使用 JavaScript `Map` 实例，用于缓存解析后的规则链 AST，避免每次点值上报都重新解析 `elData`。
+
+**内存结构：**
+
+```javascript
+{
+  "chain45": {
+    type: "function",
+    name: "IF",
+    args: [
+      { type: "function", name: "effectiveTimeCmp", args: [] },
+      {
+        type: "function",
+        name: "IF",
+        args: [
+          { type: "function", name: "deviceCalculateCmp", args: [] },
+          { type: "function", name: "controlCmp", args: [] }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Key 格式：** `chainName`
+
+**生命周期：**
+- 首次执行规则时写入
+- 节点重启后清空（不持久化，因规则可能已更新）
+
+---
+
+### 4.7 缓存与持久化数据查看 API
+
+**新增 HTTP 接口（rule-manager.js）：**
+
+| 方法 | 路径 | 参数 | 说明 |
+|------|------|------|------|
+| GET | `/rule-energy-manager/:id/cache-data` | `?type=all/rules/times/mappings/alarmStates` | 查看内存缓存数据 |
+| GET | `/rule-energy-manager/:id/persist-data` | `?type=all/rules/times/mappings/alarmStates` | 查看持久化文件数据 |
+
+**cache-data 返回示例：**
+
+```json
+{
+  "type": "cacheData",
+  "cacheType": "all",
+  "data": {
+    "rules": {
+      "chain45": { "chainName": "chain45", "ruleId": 64, ... }
+    },
+    "times": {
+      "营业时间": { "timeName": "营业时间", "timeType": "2", ... }
+    },
+    "mappings": {
+      "1111101101": ["1", "3", "30"]
+    },
+    "alarmStates": {
+      "engine-node-id": {
+        "nodeName": "规则引擎",
+        "count": 2,
+        "states": {
+          "chain45:TC1ETExIL...": {
+            "alarmId": "uuid",
+            "timestamp": 1778743364523,
+            "alarmMessage": { "type": "alarm", "chainName": "chain45", ... }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+**persist-data 返回示例：**
+
+```json
+{
+  "type": "persistData",
+  "persistType": "all",
+  "data": {
+    "rules": {
+      "filePath": "/Users/xxx/.node-red/rule-cache/rules.json",
+      "size": 15234,
+      "lastModified": "2026-05-18T09:30:00.000Z",
+      "content": { "chain45": { ... } }
+    },
+    "times": {
+      "filePath": "/Users/xxx/.node-red/rule-cache/times.json",
+      "size": 512,
+      "exists": false
+    },
+    "alarmStates": {
+      "filePath": "/Users/xxx/.node-red/rule-cache/alarm-states.json",
+      "size": 2048,
+      "lastModified": "2026-05-18T09:30:00.000Z",
+      "content": {
+        "chain45:TC1ETExIL...": {
+          "alarmId": "uuid",
+          "timestamp": 1778743364523,
+          "alarmMessage": { "type": "alarm", ... }
+        }
+      }
+    }
+  }
+}
+```
 
 ---
 
@@ -916,16 +1128,29 @@ function evalExpression(expr) {
 
 ### 7.3 alarmRecovery
 
+基于原告警消息修改状态字段输出：
+
 ```json
 {
-  "type": "alarmRecovery",
+  "type": "alarm",
   "chainName": "chain45",
   "ruleId": 64,
   "projectCard": "L-DLLH-DLKDT01",
+  "alarmId": "uuid",
+  "conditionId": "chain45_xxx",
+  "priority": "1",
+  "alarmDesc": "温度过高",
+  "alarmStatus": "Normal",
   "pointId": "TC1ETExIL...",
-  "normalTime": 1778743364523
+  "slotPath": "/Drivers/水泵07/points/On/Off_Status",
+  "alarmValue": "100",
+  "pointTypeId": 1111101101,
+  "normalTime": 1778743364523,
+  "timestamp": 1778743364523
 }
 ```
+
+> 恢复消息结构与告警触发一致，仅将 `alarmStatus` 设为 `"Normal"` 并增加 `normalTime`。
 
 ---
 

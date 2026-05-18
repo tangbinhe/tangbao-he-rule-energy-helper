@@ -38,10 +38,10 @@ module.exports = function(RED) {
 
         let detail = [];
 
-        // 支持完整报文结构 或 简化结构
-        if (payload.messageContent && Array.isArray(payload.messageContent.detail)) {
-          detail = payload.messageContent.detail;
-          log(`[rule-energy-manager][${node.id}] 解析到 detail 数组, length=${detail.length}, messageId=${payload.messageId || 'none'}`);
+        // 支持 detail 直接放在 payload 中（新格式）或 简化结构
+        if (Array.isArray(payload.detail)) {
+          detail = payload.detail;
+          log(`[rule-energy-manager][${node.id}] 解析到 detail 数组, length=${detail.length}`);
         } else if (payload.rulePubType) {
           detail = [payload];
           log(`[rule-energy-manager][${node.id}] 收到简化结构报文, rulePubType=${payload.rulePubType}`);
@@ -110,6 +110,7 @@ module.exports = function(RED) {
           ruleType: rule.ruleType,
           ruleSource: rule.ruleSource,
           effectTimeName: rule.effectTimeName,
+          effectDateName: rule.effectDateName,
           elData: rule.elData,
           scriptsCount: (rule.scripts || []).length,
           pointTypesCount: (rule.rulePointTypes || []).length,
@@ -196,6 +197,72 @@ module.exports = function(RED) {
         }
       }
 
+      // 解析 edgeGroupEquipPointInfos（多设备配对分组）
+      let groupEquipPoints = [];
+      let groupMapping = {};
+      if (item.edgeGroupEquipPointInfos) {
+        try {
+          groupEquipPoints = JSON.parse(item.edgeGroupEquipPointInfos);
+          log(`[rule-energy-manager][${node.id}] 解析 edgeGroupEquipPointInfos 成功, 共 ${groupEquipPoints.length} 个分组点位`);
+
+          // 将分组点位合并到 equipPoints，用于反查 pointTypeId
+          equipPoints = equipPoints.concat(groupEquipPoints);
+          log(`[rule-energy-manager][${node.id}] 合并分组点位到 equipPoints, 当前共 ${equipPoints.length} 个点位`);
+
+          // 构建分组映射（兼容空 groupName 的情况）
+          const groupPointMapping = {}; // groupName -> Set<pointId>
+          const pointGroupMapping = {}; // pointId -> Set<groupName>
+
+          for (const gp of groupEquipPoints) {
+            if (!gp.pointId) continue;
+
+            // 有 groupName 才构建映射关系
+            if (gp.groupName) {
+              if (!groupPointMapping[gp.groupName]) {
+                groupPointMapping[gp.groupName] = new Set();
+              }
+              groupPointMapping[gp.groupName].add(gp.pointId);
+
+              if (!pointGroupMapping[gp.pointId]) {
+                pointGroupMapping[gp.pointId] = new Set();
+              }
+              pointGroupMapping[gp.pointId].add(gp.groupName);
+            }
+          }
+
+          // 构建最终映射结构: pointId -> { groupName: [pointIds] }
+          for (const pointId of Object.keys(pointGroupMapping)) {
+            const groupNames = Array.from(pointGroupMapping[pointId]);
+            const mappingObj = {};
+            for (const groupName of groupNames) {
+              if (groupPointMapping[groupName]) {
+                mappingObj[groupName] = Array.from(groupPointMapping[groupName]);
+              }
+            }
+            groupMapping[pointId] = mappingObj;
+          }
+
+          const groupNames = Object.keys(groupPointMapping);
+          log(`[rule-energy-manager][${node.id}] 构建分组映射完成, 共 ${groupNames.length} 个分组: [${groupNames}]`);
+        } catch (e) {
+          log(`[rule-energy-manager][${node.id}] 解析 edgeGroupEquipPointInfos 失败: ${e.message}`);
+        }
+      }
+
+      // 自动生成缺失的 elData（对齐 Java 端 LiteFlow 链结构）
+      let elData = edgeRuleInfo.elData;
+      if (!elData) {
+        const source = edgeRuleInfo.ruleSource;
+        if (source === 'alarm') {
+          elData = '<chain>IF(effectiveTimeCmp,IF(deviceCalculateCmp,alarmCmp))</chain>';
+        } else if (source === 'control') {
+          elData = '<chain>IF(effectiveTimeCmp,IF(deviceCalculateCmp,controlCmp))</chain>';
+        }
+        if (elData) {
+          log(`[rule-energy-manager][${node.id}] chainName=${chainName} 缺失 elData, 根据 ruleSource=${source} 自动生成`);
+        }
+      }
+
       // 构建规则对象
       const rule = {
         chainName: edgeRuleInfo.chainName,
@@ -203,15 +270,24 @@ module.exports = function(RED) {
         ruleType: edgeRuleInfo.ruleType,
         ruleSource: edgeRuleInfo.ruleSource,
         effectTimeName: edgeRuleInfo.effectTimeName,
-        elData: edgeRuleInfo.elData,
+        effectDateName: edgeRuleInfo.effectDateName,
+        elData: elData,
         scripts: edgeRuleInfo.scripts || [],
         rulePointTypes: edgeRuleInfo.rulePointTypes || [],
         equipPoints: equipPoints,
+        groupEquipPoints: groupEquipPoints,
+        groupMapping: groupMapping,
+        alarmLevel: edgeRuleInfo.alarmLevel,
+        alarmDesc: edgeRuleInfo.alarmDesc,
         updateTime: Date.now()
       };
 
       node.ruleCache.set(chainName, rule);
       log(`[rule-energy-manager][${node.id}] 规则已保存, chainName=${chainName}, 当前规则总数=${node.ruleCache.size()}`);
+
+      // 同步刷新 engine 节点的规则缓存和 AST 缓存
+      refreshEngineRuleCache(log);
+      clearEngineAstCache(chainName, log);
 
       results.push({
         type: 'ruleUpdated',
@@ -295,6 +371,10 @@ module.exports = function(RED) {
 
       node.ruleCache.remove(chainName);
 
+      // 同步刷新 engine 节点的规则缓存和 AST 缓存
+      refreshEngineRuleCache(log);
+      clearEngineAstCache(chainName, log);
+
       results.push({
         type: 'ruleDeleted',
         chainName: chainName
@@ -303,6 +383,47 @@ module.exports = function(RED) {
     } catch (e) {
       log(`[rule-energy-manager][${node.id}] 解析 deleteRule 失败: ${e.message}`);
       results.push({ type: 'error', action: 'deleteRule', error: e.message });
+    }
+  }
+
+  /**
+   * 清理所有 engine 节点的 AST 缓存
+   * @param {string} chainName - 规则链名称
+   * @param {Function} log - 日志函数
+   */
+  function clearEngineAstCache(chainName, log) {
+    let count = 0;
+    RED.nodes.eachNode(function(n) {
+      if (n.type === 'rule-energy-engine') {
+        const engineNode = RED.nodes.getNode(n.id);
+        if (engineNode && engineNode.astCache) {
+          engineNode.astCache.delete(chainName);
+          count++;
+        }
+      }
+    });
+    if (count > 0) {
+      log(`[rule-energy-manager] 清理 engine AST 缓存, chainName=${chainName}, 共 ${count} 个节点`);
+    }
+  }
+
+  /**
+   * 刷新所有 engine 节点的规则缓存
+   * @param {Function} log - 日志函数
+   */
+  function refreshEngineRuleCache(log) {
+    let count = 0;
+    RED.nodes.eachNode(function(n) {
+      if (n.type === 'rule-energy-engine') {
+        const engineNode = RED.nodes.getNode(n.id);
+        if (engineNode && engineNode.ruleCache) {
+          engineNode.ruleCache._load();
+          count++;
+        }
+      }
+    });
+    if (count > 0) {
+      log(`[rule-energy-manager] 刷新 engine 规则缓存, 共 ${count} 个节点`);
     }
   }
 
@@ -321,6 +442,7 @@ module.exports = function(RED) {
       ruleType: rule.ruleType,
       ruleSource: rule.ruleSource,
       effectTimeName: rule.effectTimeName,
+      effectDateName: rule.effectDateName,
       elData: rule.elData,
       scriptsCount: (rule.scripts || []).length,
       pointTypesCount: (rule.rulePointTypes || []).length,
@@ -374,6 +496,11 @@ module.exports = function(RED) {
       return res.status(404).json({ error: '节点不存在或未就绪' });
     }
     node.ruleCache.remove(req.params.chainName);
+
+    // 同步刷新 engine 节点的规则缓存和 AST 缓存
+    refreshEngineRuleCache(() => {});
+    clearEngineAstCache(req.params.chainName, () => {});
+
     res.json({ type: 'ruleDeleted', chainName: req.params.chainName });
   });
 
@@ -401,5 +528,97 @@ module.exports = function(RED) {
     }
     node.mappingCache.remove(req.params.pointTypeId);
     res.json({ type: 'mappingDeleted', pointTypeId: req.params.pointTypeId });
+  });
+
+  // ==================== 缓存与持久化数据查看 API ====================
+  const fs = require('fs');
+  const path = require('path');
+
+  RED.httpAdmin.get('/rule-energy-manager/:id/cache-data', function(req, res) {
+    const node = RED.nodes.getNode(req.params.id);
+    if (!node) {
+      return res.status(404).json({ error: '节点不存在或未就绪' });
+    }
+
+    const cacheType = req.query.type || 'all';
+    const result = {};
+
+    // 规则缓存
+    if (cacheType === 'all' || cacheType === 'rules') {
+      result.rules = node.ruleCache ? node.ruleCache.getAll() : {};
+    }
+
+    // 时间配置缓存
+    if (cacheType === 'all' || cacheType === 'times') {
+      result.times = node.timeCache ? node.timeCache.getAll() : {};
+    }
+
+    // 映射缓存
+    if (cacheType === 'all' || cacheType === 'mappings') {
+      result.mappings = node.mappingCache ? node.mappingCache.getAll() : {};
+    }
+
+    // 告警状态缓存（从所有 engine 节点获取）
+    if (cacheType === 'all' || cacheType === 'alarmStates') {
+      result.alarmStates = {};
+      // 遍历所有 engine 节点，自动关联（项目独立部署，通常只有一个 engine）
+      RED.nodes.eachNode(function(n) {
+        if (n.type === 'rule-energy-engine') {
+          const engineNode = RED.nodes.getNode(n.id);
+          if (engineNode && engineNode.alarmStateCache) {
+            result.alarmStates[n.id] = {
+              nodeName: n.name || n.id,
+              states: engineNode.alarmStateCache.getAll(),
+              count: engineNode.alarmStateCache.size()
+            };
+          }
+        }
+      });
+    }
+
+    res.json({ type: 'cacheData', cacheType, data: result });
+  });
+
+  RED.httpAdmin.get('/rule-energy-manager/:id/persist-data', function(req, res) {
+    const node = RED.nodes.getNode(req.params.id);
+    if (!node) {
+      return res.status(404).json({ error: '节点不存在或未就绪' });
+    }
+
+    const persistType = req.query.type || 'all';
+    const result = {};
+
+    const CACHE_DIR = path.join(process.env.HOME || process.env.USERPROFILE || '.', '.node-red', 'rule-cache');
+
+    const fileMap = {
+      rules: 'rules.json',
+      times: 'times.json',
+      mappings: 'mappings.json',
+      alarmStates: 'alarm-states.json'
+    };
+
+    for (const [key, filename] of Object.entries(fileMap)) {
+      if (persistType === 'all' || persistType === key) {
+        const filePath = path.join(CACHE_DIR, filename);
+        try {
+          if (fs.existsSync(filePath)) {
+            const stat = fs.statSync(filePath);
+            const content = fs.readFileSync(filePath, 'utf8');
+            result[key] = {
+              filePath,
+              size: stat.size,
+              lastModified: stat.mtime,
+              content: JSON.parse(content)
+            };
+          } else {
+            result[key] = { filePath, exists: false };
+          }
+        } catch (e) {
+          result[key] = { filePath, error: e.message };
+        }
+      }
+    }
+
+    res.json({ type: 'persistData', persistType, data: result });
   });
 };

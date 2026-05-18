@@ -37,25 +37,31 @@ npm install /path/to/tangbao-he-rule-energy-helper
 
 ```json
 {
-  "messageContent": {
-    "detail": [
-      {
-        "rulePubType": "ruleAndPointInfo",
-        "edgeRuleInfo": "{...}",
-        "edgeEquipPointInfos": "[...]"
-      },
-      {
-        "rulePubType": "edgeRelativeTime",
-        "edgeRelativeTimeList": "[...]"
-      },
-      {
-        "rulePubType": "pointTypeRuleMapping",
-        "pointTypeRuleMappingList": "[...]"
-      }
-    ]
-  }
+  "timeStamp": 1778743364523,
+  "companyId": "longfor",
+  "projectCard": "L-DLLH-DLKDT01",
+  "cmd": "set",
+  "detail": [
+    {
+      "rulePubType": "ruleAndPointInfo",
+      "edgeRuleInfo": "{...}",
+      "edgeEquipPointInfos": "[...]",
+      "edgeGroupEquipPointInfos": "[...]"
+    },
+    {
+      "rulePubType": "edgeRelativeTime",
+      "edgeRelativeTimeList": "[...]"
+    },
+    {
+      "rulePubType": "pointTypeRuleMapping",
+      "pointTypeRuleMappingList": "[...]"
+    }
+  ],
+  "version": "1.1"
 }
 ```
+
+> `msg.payload` 直接传入报文内容，`detail` 在 payload 根层级。
 
 **支持的 rulePubType**：
 
@@ -105,23 +111,33 @@ npm install /path/to/tangbao-he-rule-energy-helper
   "type": "alarm",
   "chainName": "chain45",
   "ruleId": 64,
+  "alarmId": "uuid",
+  "conditionId": "chain45_xxx",
+  "priority": "1",
+  "alarmDesc": "温度过高",
   "pointId": "...",
   "slotPath": "...",
-  "pointTypeId": 1111101101,
-  "priority": "1",
   "alarmValue": "100",
-  "alarmTime": 1778815454123
+  "pointTypeId": 1111101101,
+  "timestamp": 1778815454123
 }
 
-// 告警恢复
+// 告警恢复（结构与告警触发一致，alarmStatus 为 Normal）
 {
-  "type": "alarmRecovery",
+  "type": "alarm",
   "chainName": "chain45",
   "ruleId": 64,
+  "alarmId": "uuid",
+  "conditionId": "chain45_xxx",
+  "priority": "1",
+  "alarmDesc": "温度过高",
+  "alarmStatus": "Normal",
   "pointId": "...",
   "slotPath": "...",
+  "alarmValue": "100",
   "pointTypeId": 1111101101,
-  "normalTime": 1778815454123
+  "normalTime": 1778815454123,
+  "timestamp": 1778815454123
 }
 ```
 
@@ -155,7 +171,15 @@ npm install /path/to/tangbao-he-rule-energy-helper
   ],
   "equipPoints": [
     { "equipId": "...", "pointId": "...", "pointTypeId": 1111101101, "slotPath": "..." }
-  ]
+  ],
+  "groupEquipPoints": [
+    { "equipId": "...", "pointId": "...", "pointTypeId": 1111101101, "slotPath": "...", "groupName": "groupA" }
+  ],
+  "groupMapping": {
+    "pointId1": { "groupA": ["pointId1", "pointId2"] }
+  },
+  "alarmLevel": "1",
+  "alarmDesc": "温度过高"
 }
 ```
 
@@ -174,6 +198,25 @@ npm install /path/to/tangbao-he-rule-energy-helper
 | GET | `/rule-energy-manager/:id/mappings` | 获取所有点类型映射 |
 | DELETE | `/rule-energy-manager/:id/mapping/:pointTypeId` | 删除映射 |
 | GET | `/rule-energy-manager/:id/status` | 获取缓存状态统计 |
+| GET | `/rule-energy-manager/:id/cache-data?type=xxx` | 查看内存缓存数据 |
+| GET | `/rule-energy-manager/:id/persist-data?type=xxx` | 查看持久化文件数据 |
+
+**cache-data 参数：** `type` 可选值 `all`（默认）、`rules`、`times`、`mappings`、`alarmStates`
+
+**persist-data 参数：** `type` 可选值 `all`（默认）、`rules`、`times`、`mappings`、`alarmStates`
+
+**persist-data 返回字段：**
+- `filePath` — 文件绝对路径
+- `size` — 文件大小（字节）
+- `lastModified` — 最后修改时间
+- `content` — 文件解析后的 JSON 内容
+- `exists` — 文件是否存在（不存在时返回）
+
+**支持查看的持久化文件：**
+- `rules.json` — 规则数据
+- `times.json` — 时间配置数据
+- `mappings.json` — 点类型映射数据
+- `alarm-states.json` — 告警状态数据
 
 ## 缓存文件位置
 
@@ -183,6 +226,7 @@ npm install /path/to/tangbao-he-rule-energy-helper
 - `times.json` — 时间配置缓存
 - `mappings.json` — 点类型映射缓存
 - `delays.json` — 延迟状态缓存
+- `alarm-states.json` — 告警状态缓存
 
 ## 示例流
 
