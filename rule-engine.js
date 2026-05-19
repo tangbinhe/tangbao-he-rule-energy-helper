@@ -42,7 +42,7 @@ module.exports = function(RED) {
     // 控制输出去重缓存：pointId -> { value, timestamp }
     node.lastControlValues = {};
 
-    // ==================== 延迟到期自动执行定时器（每30秒扫描） ====================
+    // ==================== 延迟到期自动执行定时器（每300秒扫描，与Java端一致） ====================
     node.delayCheckInterval = setInterval(() => {
       try {
         const expiredItems = node.delayManager.getExpiredItems();
@@ -53,7 +53,7 @@ module.exports = function(RED) {
       } catch (e) {
         log(`[rule-energy-engine][${node.id}] 延迟定时器异常: ${e.message}`);
       }
-    }, 30000);
+    }, 300000);
 
     node.on('input', function(msg) {
       log(`[rule-energy-engine][${node.id}] 收到点值上报`);

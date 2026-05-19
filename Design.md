@@ -20,7 +20,6 @@
   "gatewayCode": "",
   "cmdType": 71,
   "count": 1,
-  "projectCard": "L-DLLH-DLKDT01",
   "cmd": "set",
   "detail": [
     // 具体业务数据
@@ -37,7 +36,6 @@
 
 ```json
 {
-  "projectCard": "L-DLLH-DLKDT01",
   "edgeRuleInfo": "{...}",
   "edgeEquipPointInfos": "[...]",
   "pubFlag": true,
@@ -45,7 +43,9 @@
 }
 ```
 
-`edgeRuleInfo` 解析后：
+`edgeRuleInfo` 解析后（`ruleSource` 决定规则类型）：
+
+**① 控制规则（`ruleSource: "control"`）：**
 
 ```json
 {
@@ -66,6 +66,34 @@
   ]
 }
 ```
+
+**② 告警规则（`ruleSource: "alarm"`）：**
+
+```json
+{
+  "chainName": "chain46",
+  "effectTimeName": "营业时间",
+  "effectDateName": "运行日期",
+  "elData": "<chain>IF(effectiveTimeCmp,IF(deviceCalculateCmp,alarmCmp))</chain>",
+  "ruleId": 65,
+  "rulePointTypes": [
+    { "dataType": "in", "pointTypeId": 1111101101, "stepId": 558 },
+    { "dataType": "in", "pointTypeId": 1111101102, "stepId": 559 }
+  ],
+  "ruleSource": "alarm",
+  "ruleType": "1",
+  "priority": "3",
+  "alarmDesc": "温度过高",
+  "scripts": [
+    { "function": "EMPTY", "id": 558, "stepIndex": 1, "stepType": "0" },
+    { "delay": 0, "function": "{1111101101}>80", "id": 559, "stepIndex": 2, "stepType": "1" }
+  ]
+}
+```
+
+> 两种规则的区别：
+> - **控制规则**：`ruleSource="control"`，`elData` 最终调用 `controlCmp`，`rulePointTypes` 含 `dataType="control"`，`scripts` 含 `stepType="3"`
+> - **告警规则**：`ruleSource="alarm"`，`elData` 最终调用 `alarmCmp`，`rulePointTypes` 只有 `dataType="in"`，`scripts` 无 `stepType="3"`，额外含 `priority`/`alarmDesc`
 
 `edgeEquipPointInfos` 解析后：
 
@@ -108,7 +136,6 @@
 
 ```json
 {
-  "projectCard": "L-DLLH-DLKDT01",
   "edgeRelativeTimeList": "[{\"begin\":\"09:16:10\",\"end\":\"23:16:10\",\"timeName\":\"营业时间\",\"timeType\":\"2\"}]",
   "rulePubType": "edgeRelativeTime"
 }
@@ -131,7 +158,6 @@
 
 ```json
 {
-  "projectCard": "L-DLLH-DLKDT01",
   "pointTypeRuleMappingList": "[{\"chainIds\":[\"1\",\"3\",\"30\"],\"pointTypeId\":1010101100}]",
   "rulePubType": "pointTypeRuleMapping"
 }
@@ -149,7 +175,6 @@
 
 ```json
 {
-  "projectCard": "L-DLLH-DLKDT01",
   "edgeRuleInfo": "{\"chainName\":\"chain45\"}",
   "rulePubType": "deleteRule"
 }
@@ -194,8 +219,7 @@
 
 ```javascript
 defaults: {
-  name: { value: '' },
-  projectCard: { value: '', required: true }
+  name: { value: '' }
 }
 ```
 
@@ -227,7 +251,7 @@ msg 流入 (云端报文)
 
 | 场景 | 日志内容 |
 |------|---------|
-| 收到报文 | `[rule-energy-manager][${nodeId}] 收到报文, messageId=${messageId}, projectCard=${projectCard}` |
+| 收到报文 | `[rule-energy-manager][${nodeId}] 收到报文, topic=${msg.topic || 'none'}` |
 | 解析 detail | `[rule-energy-manager][${nodeId}] 解析到 detail 数组, length=${length}` |
 | 处理 ruleAndPointInfo | `[rule-energy-manager][${nodeId}] 处理 ruleAndPointInfo, chainName=${chainName}, ruleId=${ruleId}, pubFlag=${pubFlag}` |
 | 解析 edgeRuleInfo | `[rule-energy-manager][${nodeId}] 解析 edgeRuleInfo 成功, chainName=${chainName}, scripts=${scripts.length}个` |
@@ -251,7 +275,7 @@ msg 流入 (云端报文)
 
 **输入：** `msg.payload` = 单条或批量点值
 
-**输出：** `msg`（标准 Node-RED message，payload 为 control/alarm/alarmRecovery）
+**输出：** `msg`（标准 Node-RED message，payload 为 control/alarm。恢复消息 `type` 同样为 `alarm`，仅 `alarmStatus` 为 `"normal"`）
 
 **配置项：**
 
@@ -357,7 +381,7 @@ msg 流入 (点值上报)
 
 ### 4.1 rule-cache.js（规则缓存）
 
-**内存结构：**
+**内存结构（控制规则示例）：**
 
 ```javascript
 {
@@ -367,46 +391,57 @@ msg 流入 (点值上报)
     ruleType: "1",
     ruleSource: "control",
     effectTimeName: "营业时间",
-    elData: "...",
+    effectDateName: null,
+    elData: "<chain>IF(effectiveTimeCmp,IF(deviceCalculateCmp,controlCmp))</chain>",
     scripts: [...],
-    rulePointTypes: [...],
+    rulePointTypes: [
+      { dataType: "in", pointTypeId: 1111101101, stepId: 556 },
+      { dataType: "control", pointTypeId: 1111101104, stepId: 557 }
+    ],
     equipPoints: [...],
     groupEquipPoints: [...],
     groupMapping: {
       "pointId1": { "groupA": ["pointId1", "pointId2"] }
     },
-    alarmLevel: "1",
-    alarmDesc: "温度过高",
-    projectCard: "L-DLLH-DLKDT01",
     updateTime: 1778743364523
-  }
-}
-```
-
-**内存结构详情：**
-
-```javascript
-{
-  "chain45": {
-    chainName: "chain45",
-    ruleId: 64,
+  },
+  "chain46": {
+    chainName: "chain46",
+    ruleId: 65,
     ruleType: "1",
-    ruleSource: "control",
+    ruleSource: "alarm",
     effectTimeName: "营业时间",
-    elData: "...",
-    scripts: [...],
-    rulePointTypes: [...],
+    effectDateName: "运行日期",
+    elData: "<chain>IF(effectiveTimeCmp,IF(deviceCalculateCmp,alarmCmp))</chain>",
+    scripts: [
+      { function: "EMPTY", id: 558, stepIndex: 1, stepType: "0" },
+      { delay: 0, function: "{1111101101}>80", id: 559, stepIndex: 2, stepType: "1" }
+    ],
+    rulePointTypes: [
+      { dataType: "in", pointTypeId: 1111101101, stepId: 558 },
+      { dataType: "in", pointTypeId: 1111101102, stepId: 559 }
+    ],
     equipPoints: [...],
     groupEquipPoints: [...],
-    groupMapping: {
-      "pointId1": { "groupA": ["pointId1", "pointId2"] }
-    },
-    alarmLevel: "1",
+    groupMapping: {},
+    priority: "3",
     alarmDesc: "温度过高",
     updateTime: 1778743364523
   }
 }
 ```
+
+**字段说明：**
+
+| 字段 | 控制规则 | 告警规则 | 说明 |
+|------|---------|---------|------|
+| `ruleSource` | `"control"` | `"alarm"` | 规则来源，决定执行链终点 |
+| `elData` | 含 `controlCmp` | 含 `alarmCmp` | 规则执行链 XML |
+| `rulePointTypes` | 含 `dataType="in"` 和 `"control"` | 只有 `dataType="in"` | 告警规则无控制输出点位 |
+| `scripts` | 含 `stepType="3"` | 无 `stepType="3"` | 告警规则无执行脚本 |
+| `priority` | 无 | 有 | 告警优先级（如 `"1"`~`"5"`） |
+| `alarmDesc` | 无 | 有 | 告警描述文本 |
+| `effectDateName` | 可选 | 可选 | 生效日期范围配置名称 |
 
 **持久化文件：** `~/.node-red/rule-cache/rules.json`
 
@@ -490,6 +525,20 @@ msg 流入 (点值上报)
 
 ### 4.4 delay-manager.js（延迟状态管理）
 
+**触发场景：**
+
+延迟由 `device-calculate-cmp.js` 触发。当规则脚本 `stepType="1"` 的条件表达式计算结果为 `true`，且该脚本配置了 `delay > 0` 时，首次满足条件会记录延迟状态并返回 `false`（不继续执行后续组件）；待延迟时间到期后，再次执行规则链时返回 `true`，才会触发 `controlCmp` 或 `alarmCmp`。
+
+**延迟逻辑：**
+
+1. **首次满足**：条件表达式结果为 `true` 且 `delay > 0`，检查缓存中是否已存在该 key（`${chainName}:${stepIndex}`）
+   - 不存在：记录 `processTimestamp = Date.now()`，保存 `pointListSnapshot` 和 `ruleSnapshot`，返回 `false`
+   - 已存在：计算已过去的时间 `elapsed = (now - processTimestamp) / 1000`
+     - `elapsed >= delay`：延迟到期，返回 `true`
+     - `elapsed < delay`：延迟未到期，返回 `false`
+2. **条件不满足**：表达式结果为 `false`，清除该规则所有延迟状态，触发告警恢复
+3. **定时扫描**：`rule-energy-engine` 每 300 秒扫描一次 `getExpiredItems()`，对到期的延迟项自动重新执行规则链（与 Java 端一致）
+
 **内存结构：**
 
 ```javascript
@@ -500,7 +549,14 @@ msg 流入 (点值上报)
     pointId: "TC1ETExIL...",
     processTimestamp: 1778743364523,
     delay: 10,
-    timestamp: 1778743364523
+    timestamp: 1778743364523,
+    pointListSnapshot: [...],
+    ruleSnapshot: {
+      chainName: "chain45",
+      ruleId: 64,
+      ruleSource: "control",
+      elData: "..."
+    }
   }
 }
 ```
@@ -509,19 +565,21 @@ msg 流入 (点值上报)
 
 **方法：**
 
-- `set(key, info)` — key = `${projectCard}:${chainName}:${stepIndex}`
+- `set(key, info)` — key = `${chainName}:${stepIndex}`
 - `get(key)`
 - `remove(key)`
 - `clear(chainName)` — 清除某规则的所有延迟
 - `isExpired(key, now)` — 检查延迟是否到期
+- `getExpiredItems()` — 获取所有到期的延迟项（供定时扫描使用）
 
 **日志：**
 
 - `[delay-manager] 加载本地延迟状态, 共 ${count} 条`
 - `[delay-manager] 设置延迟, key=${key}, delay=${delay}s`
-- `[delay-manager] 检查延迟, key=${key}, 已过去 ${elapsed}s, 剩余 ${remain}s`
+- `[delay-manager] 获取延迟, key=${key}, 已过去 ${elapsed}s, 剩余 ${remain}s`
 - `[delay-manager] 延迟到期, key=${key}`
 - `[delay-manager] 清除延迟, key=${key}`
+- `[delay-manager] 扫描到期延迟, 共 ${count} 条`
 
 ---
 
@@ -535,6 +593,7 @@ msg 流入 (点值上报)
 {
   "chain45:TC1ETExIL...": {
     alarmId: "uuid",
+    alarmTime: 1778743364523,
     timestamp: 1778743364523,
     alarmMessage: {
       type: "alarm",
@@ -542,12 +601,12 @@ msg 流入 (点值上报)
       ruleId: 64,
       alarmId: "uuid",
       conditionId: "chain45_xxx",
-      alarmLevel: "1",
-      alarmDesc: "温度过高",
-      alarmStatus: "OffNormal",
+      alarmStatus: "offnormal",
+      priority: "3",
       pointId: "TC1ETExIL...",
       slotPath: "/Drivers/水泵07/points/On/Off_Status",
       alarmValue: "123",
+      alarmDesc: "温度过高",
       pointTypeId: 1111101101,
       timestamp: 1778743364523
     }
@@ -728,363 +787,6 @@ msg 流入 (点值上报)
 
 ---
 
-### 5.2 effective-time-cmp.js
-
-```javascript
-/**
- * 生效时间判断
- * @param {Object} context - { rule, projectCard, chainName }
- * @returns {boolean} true=生效, false=不生效（触发恢复）
- */
-function effectiveTimeCmp(context) {
-  const { rule, projectCard, chainName } = context;
-
-  // 1. 获取时间配置
-  const timeName = rule.effectTimeName;
-  if (!timeName) {
-    log(`[effectiveTimeCmp][${chainName}] 无生效时间配置, 默认通过`);
-    return true;
-  }
-
-  const timeConfig = timeCache.get(timeName);
-  if (!timeConfig) {
-    log(`[effectiveTimeCmp][${chainName}] 时间配置不存在: ${timeName}, 默认通过`);
-    return true;
-  }
-
-  // 2. 日期判断（timeType="3" 时）
-  if (timeConfig.timeType === "3" && timeConfig.begin && timeConfig.end) {
-    const now = new Date();
-    const startDate = parseDate(timeConfig.begin);
-    const endDate = parseDate(timeConfig.end);
-    if (now < startDate || now > endDate) {
-      log(`[effectiveTimeCmp][${chainName}] 日期不满足: ${timeConfig.begin} ~ ${timeConfig.end}`);
-      triggerAlarmRecovery(context);
-      return false;
-    }
-  }
-
-  // 3. 时间判断（timeType="2" 时）
-  const nowTime = formatTime(new Date());  // "HH:mm:ss"
-  const begin = timeConfig.begin;  // "09:16:10"
-  const end = timeConfig.end;      // "23:16:10"
-
-  let result;
-  if (begin <= end) {
-    // 正常区间 09:00-18:00
-    result = (nowTime >= begin && nowTime <= end);
-  } else {
-    // 跨天区间 21:00-06:00
-    result = (nowTime >= begin || nowTime <= end);
-  }
-
-  if (!result) {
-    log(`[effectiveTimeCmp][${chainName}] 时间不满足: ${begin} ~ ${end}, 当前: ${nowTime}`);
-    triggerAlarmRecovery(context);
-    return false;
-  }
-
-  log(`[effectiveTimeCmp][${chainName}] 时间检查通过: ${begin} ~ ${end}`);
-  return true;
-}
-```
-
----
-
-### 5.3 device-calculate-cmp.js
-
-```javascript
-/**
- * 设备条件计算
- * @param {Object} context - { rule, pointList, projectCard, chainName, stepIndex }
- * @returns {boolean} true=条件满足, false=不满足（触发恢复）
- */
-function deviceCalculateCmp(context) {
-  const { rule, pointList, chainName, stepIndex } = context;
-
-  // 1. 获取当前步骤的脚本
-  const script = rule.scripts.find(s => s.stepIndex === stepIndex);
-  if (!script) {
-    log(`[deviceCalculateCmp][${chainName}] 未找到 stepIndex=${stepIndex} 的脚本`);
-    return false;
-  }
-
-  // 2. 替换表达式中的 {pointTypeId}
-  let expr = script.function;
-  const pointMap = {};
-  for (let p of pointList) {
-    pointMap[p.pointTypeId] = p.value;
-  }
-
-  expr = expr.replace(/\{(\d+)\}/g, (match, ptid) => {
-    const value = pointMap[ptid];
-    log(`[deviceCalculateCmp][${chainName}] 替换 {${ptid}} → ${value}`);
-    return value !== undefined ? value : '0';
-  });
-
-  log(`[deviceCalculateCmp][${chainName}] 替换后表达式: ${expr}`);
-
-  // 3. 计算表达式
-  let result;
-  try {
-    result = evalExpression(expr);
-    log(`[deviceCalculateCmp][${chainName}] 计算结果: ${result}`);
-  } catch (e) {
-    log(`[deviceCalculateCmp][${chainName}] 表达式计算错误: ${e.message}`);
-    return false;
-  }
-
-  // 4. 处理延迟
-  const delay = script.delay || 0;
-  if (delay > 0 && result) {
-    const key = `${projectCard}:${chainName}:${stepIndex}`;
-    const delayInfo = delayManager.get(key);
-
-    if (!delayInfo) {
-      // 首次满足，记录时间戳
-      delayManager.set(key, {
-        chainName, stepIndex, projectCard,
-        pointId: pointList[0]?.pointId,
-        processTimestamp: Date.now(),
-        delay
-      });
-      log(`[deviceCalculateCmp][${chainName}] 首次满足, 延迟 ${delay}s, 记录时间戳`);
-      return false;  // 首次返回 false，等待延迟
-    } else {
-      // 非首次，检查延迟是否到期
-      const elapsed = (Date.now() - delayInfo.processTimestamp) / 1000;
-      if (elapsed >= delay) {
-        log(`[deviceCalculateCmp][${chainName}] 延迟已到期 (${elapsed}s >= ${delay}s)`);
-        return true;
-      } else {
-        log(`[deviceCalculateCmp][${chainName}] 延迟未到期, 还需 ${delay - elapsed}s`);
-        return false;
-      }
-    }
-  }
-
-  // 5. 不满足条件，触发恢复
-  if (!result) {
-    log(`[deviceCalculateCmp][${chainName}] 条件不满足`);
-    triggerAlarmRecovery(context);
-    delayManager.clear(chainName);  // 清除延迟状态
-  }
-
-  return result;
-}
-```
-
----
-
-### 5.4 control-cmp.js
-
-```javascript
-/**
- * 控制输出
- * @param {Object} context - { rule, pointList, projectCard, chainName, stepIndex }
- * @returns {Object} 输出结果
- */
-function controlCmp(context) {
-  const { rule, pointList, chainName, stepIndex } = context;
-
-  // 1. 获取当前步骤的脚本
-  const script = rule.scripts.find(s => s.stepIndex === stepIndex);
-  if (!script) {
-    log(`[controlCmp][${chainName}] 未找到 stepIndex=${stepIndex} 的脚本`);
-    return null;
-  }
-
-  // 2. 计算设定值
-  let expr = script.function;
-  const pointMap = {};
-  for (let p of pointList) {
-    pointMap[p.pointTypeId] = p.value;
-  }
-
-  expr = expr.replace(/\{(\d+)\}/g, (match, ptid) => {
-    return pointMap[ptid] !== undefined ? pointMap[ptid] : '0';
-  });
-
-  let value;
-  try {
-    value = evalExpression(expr);
-    log(`[controlCmp][${chainName}] 设定值计算: ${expr} = ${value}`);
-  } catch (e) {
-    log(`[controlCmp][${chainName}] 设定值计算错误: ${e.message}`);
-    return null;
-  }
-
-  // 3. 找到控制输出点位
-  const controlPointType = rule.rulePointTypes.find(rpt => rpt.dataType === 'control');
-  if (!controlPointType) {
-    log(`[controlCmp][${chainName}] 未找到控制输出点位`);
-    return null;
-  }
-
-  const equipPoint = rule.equipPoints.find(ep => ep.pointTypeId === controlPointType.pointTypeId);
-  if (!equipPoint) {
-    log(`[controlCmp][${chainName}] 未找到控制输出设备点位`);
-    return null;
-  }
-
-  // 4. 构建输出
-  const output = {
-    type: 'control',
-    chainName,
-    ruleId: rule.ruleId,
-    projectCard,
-    outputs: [{
-      pointId: equipPoint.pointId,
-      slotPath: equipPoint.slotPath,
-      value: String(value),
-      equipId: equipPoint.equipId
-    }],
-    timestamp: Date.now()
-  };
-
-  log(`[controlCmp][${chainName}] 控制输出: pointId=${equipPoint.pointId}, value=${value}`);
-  return output;
-}
-```
-
----
-
-### 5.5 alarm-cmp.js
-
-```javascript
-/**
- * 告警输出
- * @param {Object} context - { rule, pointList, projectCard, chainName }
- * @returns {Object} 输出结果
- */
-function alarmCmp(context) {
-  const { rule, pointList, projectCard, chainName } = context;
-
-  // 1. 获取告警点位（dataType="in" 的第一个点）
-  const alarmPointType = rule.rulePointTypes.find(rpt => rpt.dataType === 'in');
-  if (!alarmPointType) {
-    log(`[alarmCmp][${chainName}] 未找到告警输入点位`);
-    return null;
-  }
-
-  const point = pointList.find(p => p.pointTypeId === alarmPointType.pointTypeId);
-  if (!point) {
-    log(`[alarmCmp][${chainName}] 点列表中无告警点位`);
-    return null;
-  }
-
-  // 2. 告警去重检查
-  const alarmKey = `${projectCard}:${chainName}:${point.pointId}`;
-  if (alarmStateCache.has(alarmKey)) {
-    log(`[alarmCmp][${chainName}] 告警已存在, 跳过: pointId=${point.pointId}`);
-    return null;
-  }
-
-  // 3. 构建告警
-  const alarmId = generateUUID();
-  const conditionId = `${chainName}_${md5(chainName)}`;
-
-  const output = {
-    type: 'alarm',
-    chainName,
-    ruleId: rule.ruleId,
-    projectCard,
-    alarmId,
-    conditionId,
-    priority: rule.priority || '3',
-    pointId: point.pointId,
-    slotPath: point.slotPath,
-    alarmValue: point.value,
-    alarmDesc: rule.alarmDesc || '',
-    timestamp: Date.now()
-  };
-
-  // 4. 记录告警状态
-  alarmStateCache.set(alarmKey, {
-    alarmId,
-    timestamp: Date.now()
-  });
-
-  log(`[alarmCmp][${chainName}] 新建告警: alarmId=${alarmId}, pointId=${point.pointId}`);
-  return output;
-}
-```
-
----
-
-### 5.6 告警恢复逻辑
-
-```javascript
-function triggerAlarmRecovery(context) {
-  const { rule, pointList, projectCard, chainName } = context;
-
-  // 1. 清除告警状态
-  for (let point of pointList) {
-    const alarmKey = `${projectCard}:${chainName}:${point.pointId}`;
-    if (alarmStateCache.has(alarmKey)) {
-      alarmStateCache.delete(alarmKey);
-      log(`[alarmRecovery][${chainName}] 清除告警状态: pointId=${point.pointId}`);
-    }
-  }
-
-  // 2. 清除延迟状态
-  delayManager.clear(chainName);
-  log(`[alarmRecovery][${chainName}] 清除延迟状态`);
-
-  // 3. 输出恢复消息
-  const outputs = pointList.map(point => ({
-    type: 'alarmRecovery',
-    chainName,
-    ruleId: rule.ruleId,
-    projectCard,
-    pointId: point.pointId,
-    normalTime: Date.now()
-  }));
-
-  for (let output of outputs) {
-    log(`[alarmRecovery][${chainName}] 输出恢复: pointId=${output.pointId}`);
-  }
-
-  return outputs;
-}
-```
-
----
-
-## 六、表达式计算（expr-eval.js）
-
-```javascript
-/**
- * 安全表达式计算
- * 支持: + - * / > < >= <= == != && ||
- */
-function evalExpression(expr) {
-  // 1. 清理表达式
-  expr = String(expr).trim();
-
-  // 2. 替换布尔值
-  expr = expr.replace(/\btrue\b/g, '1').replace(/\bfalse\b/g, '0');
-
-  // 3. 安全检查：只允许数字、运算符、括号、空格
-  if (!/^[0-9+\-*/().<>=!&|\s]+$/.test(expr)) {
-    throw new Error('表达式包含非法字符');
-  }
-
-  // 4. 替换运算符为 JS 风格
-  expr = expr.replace(/&&/g, '&&').replace(/\|\|/g, '||').replace(/==/g, '===').replace(/!=/g, '!==');
-
-  // 5. 使用 Function 安全计算
-  try {
-    const result = new Function('return ' + expr)();
-    return result;
-  } catch (e) {
-    throw new Error('表达式计算失败: ' + e.message);
-  }
-}
-```
-
----
-
 ## 七、输出消息格式
 
 ### 7.1 control
@@ -1094,13 +796,13 @@ function evalExpression(expr) {
   "type": "control",
   "chainName": "chain45",
   "ruleId": 64,
-  "projectCard": "L-DLLH-DLKDT01",
   "outputs": [
     {
       "pointId": "TC1ETExIL...",
       "slotPath": "/Drivers/水泵07/points/control",
       "value": "1",
-      "equipId": "L-DLLH-DLKDT01_DLKDT01-0005"
+      "equipId": "L-DLLH-DLKDT01_DLKDT01-0005",
+      "pointTypeId": 1111101104
     }
   ],
   "timestamp": 1778743364523
@@ -1114,43 +816,47 @@ function evalExpression(expr) {
   "type": "alarm",
   "chainName": "chain45",
   "ruleId": 64,
-  "projectCard": "L-DLLH-DLKDT01",
   "alarmId": "uuid",
   "conditionId": "chain45_xxx",
-  "priority": "1",
+  "alarmStatus": "offnormal",
+  "alarmTime": 1778743364523,
+  "priority": "3",
   "pointId": "TC1ETExIL...",
   "slotPath": "/Drivers/水泵07/points/On/Off_Status",
   "alarmValue": "123",
   "alarmDesc": "温度过高",
+  "pointTypeId": 1111101101,
   "timestamp": 1778743364523
 }
 ```
 
 ### 7.3 alarmRecovery
 
-基于原告警消息修改状态字段输出：
+基于原告警消息深拷贝修改状态字段输出，仅处理本次上报且存在告警缓存的点位：
 
 ```json
 {
   "type": "alarm",
   "chainName": "chain45",
   "ruleId": 64,
-  "projectCard": "L-DLLH-DLKDT01",
   "alarmId": "uuid",
   "conditionId": "chain45_xxx",
-  "priority": "1",
+  "alarmStatus": "normal",
+  "alarmTime": 1778743364523,
+  "priority": "3",
   "alarmDesc": "温度过高",
-  "alarmStatus": "Normal",
+  "recoverDesc": "报警恢复",
+  "recoverValue": "80",
   "pointId": "TC1ETExIL...",
   "slotPath": "/Drivers/水泵07/points/On/Off_Status",
   "alarmValue": "100",
   "pointTypeId": 1111101101,
-  "normalTime": 1778743364523,
+  "recoverTime": 1778743364523,
   "timestamp": 1778743364523
 }
 ```
 
-> 恢复消息结构与告警触发一致，仅将 `alarmStatus` 设为 `"Normal"` 并增加 `normalTime`。
+> 恢复消息 `type` 仍为 `"alarm"`，`alarmStatus` 设为 `"normal"`，并增加 `recoverDesc`、`recoverValue`、`recoverTime`，`alarmTime` 保留报警时的时间戳。
 
 ---
 
@@ -1172,7 +878,8 @@ tangbao-he-rule-energy-helper/
 │   ├── cache/
 │   │   ├── rule-cache.js
 │   │   ├── time-cache.js
-│   │   └── mapping-cache.js
+│   │   ├── mapping-cache.js
+│   │   └── alarm-state-cache.js
 │   ├── engine/
 │   │   ├── chain-parser.js
 │   │   ├── effective-time-cmp.js
@@ -1209,7 +916,7 @@ tangbao-he-rule-energy-helper/
 
 ## 十、实施步骤
 
-1. 创建 `lib/cache/` 三个缓存模块（带文件持久化）
+1. 创建 `lib/cache/` 四个缓存模块（带文件持久化）
 2. 创建 `lib/engine/` 五个引擎模块
 3. 创建 `lib/utils/expr-eval.js`
 4. 创建 `rule-manager.js/html`
