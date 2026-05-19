@@ -1,0 +1,4 @@
+# 忽略所有 md 文件，但保留 Design.md 和 README.md
+*.md
+!Design.md
+!README.md
