@@ -1,6 +1,6 @@
 {
     "name": "tangbao-he-rule-energy-helper",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "description": "智能规则引擎 Node-RED 节点，支持逻辑告警规则与联动控制规则的云端下发、本地执行",
     "keywords": [
         "node-red",
