@@ -155,60 +155,65 @@ module.exports = function(RED) {
             continue;
           }
 
-          // 构建 pointList（填充当前值，区分单设备/多设备）
-          const pointList = buildPointList(rule, pointValues, node.pointValueCache, triggeredPointIds, log);
-          log(`[rule-energy-engine][${node.id}] 构建 pointList, 共 ${pointList.length} 个点, 当前值: ${JSON.stringify(pointList.map(p => ({ ptid: p.pointTypeId, val: p.value })))}`);
+          // 构建执行单元（按设备/分组拆分，对齐 Java 端逻辑）
+          const executionUnits = buildExecutionUnits(rule, pointValues, node.pointValueCache, triggeredPointIds, log);
 
-          // 解析或获取缓存的 AST
-          const astKey = rule.chainName;
-          let ast = node.astCache.get(astKey);
-          if (!ast) {
+          for (let ui = 0; ui < executionUnits.length; ui++) {
+            const unit = executionUnits[ui];
+            const pointList = unit.pointList;
+            log(`[rule-energy-engine][${node.id}] 执行单元[${ui + 1}/${executionUnits.length}], 共 ${pointList.length} 个点, 当前值: ${JSON.stringify(pointList.map(p => ({ ptid: p.pointTypeId, val: p.value })))}`);
+
+            // 解析或获取缓存的 AST
+            const astKey = rule.chainName;
+            let ast = node.astCache.get(astKey);
+            if (!ast) {
+              try {
+                ast = parseChain(rule.elData, log);
+                node.astCache.set(astKey, ast);
+                log(`[rule-energy-engine][${node.id}] 解析执行链并缓存: ${rule.elData}`);
+              } catch (e) {
+                log(`[rule-energy-engine][${node.id}] 解析执行链失败: ${e.message}`);
+                continue;
+              }
+            } else {
+              log(`[rule-energy-engine][${node.id}] 使用缓存的 AST`);
+            }
+
+            // 构建执行上下文
+            const context = {
+              rule,
+              pointList,
+              chainName: rule.chainName,
+              timeCache: node.timeCache,
+              delayManager: node.delayManager,
+              log,
+              alarmStateCache: node.alarmStateCache,
+              triggerAlarmRecovery: () => {
+                doAlarmRecovery(rule, pointList, triggeredPointIds, rule.chainName, node, log, node.alarmStateCache, node.delayManager);
+              }
+            };
+
+            // 构建 cmp 函数映射
+            const cmpMap = {
+              effectiveTimeCmp: (ctx) => effectiveTimeCmp(ctx),
+              deviceCalculateCmp: (ctx) => deviceCalculateCmp(ctx),
+              controlCmp: (ctx) => controlCmp(ctx),
+              alarmCmp: (ctx) => alarmCmp(ctx)
+            };
+
+            // 执行 AST
+            log(`[rule-energy-engine][${node.id}] 开始执行 AST...`);
+            let result;
             try {
-              ast = parseChain(rule.elData, log);
-              node.astCache.set(astKey, ast);
-              log(`[rule-energy-engine][${node.id}] 解析执行链并缓存: ${rule.elData}`);
+              result = evaluateAst(ast, context, cmpMap, log);
             } catch (e) {
-              log(`[rule-energy-engine][${node.id}] 解析执行链失败: ${e.message}`);
+              log(`[rule-energy-engine][${node.id}] 执行 AST 异常: ${e.message}`);
               continue;
             }
-          } else {
-            log(`[rule-energy-engine][${node.id}] 使用缓存的 AST`);
+
+            // 处理输出（含控制去重）
+            handleResult(result, rule.chainName, node, log);
           }
-
-          // 构建执行上下文
-          const context = {
-            rule,
-            pointList,
-            chainName: rule.chainName,
-            timeCache: node.timeCache,
-            delayManager: node.delayManager,
-            log,
-            alarmStateCache: node.alarmStateCache,
-            triggerAlarmRecovery: () => {
-              doAlarmRecovery(rule, pointList, triggeredPointIds, rule.chainName, node, log, node.alarmStateCache, node.delayManager);
-            }
-          };
-
-          // 构建 cmp 函数映射
-          const cmpMap = {
-            effectiveTimeCmp: (ctx) => effectiveTimeCmp(ctx),
-            deviceCalculateCmp: (ctx) => deviceCalculateCmp(ctx),
-            controlCmp: (ctx) => controlCmp(ctx),
-            alarmCmp: (ctx) => alarmCmp(ctx)
-          };
-
-          // 执行 AST
-          log(`[rule-energy-engine][${node.id}] 开始执行 AST...`);
-          let result;
-          try {
-            result = evaluateAst(ast, context, cmpMap, log);
-          } catch (e) {
-            log(`[rule-energy-engine][${node.id}] 执行 AST 异常: ${e.message}`);
-            continue;
-          }
-
-          // 处理输出（含控制去重）
-          handleResult(result, rule.chainName, node, log);
         }
 
       } catch (e) {
@@ -293,8 +298,10 @@ module.exports = function(RED) {
       log(`[rule-energy-engine][${node.id}] 延迟执行 AST 异常: ${e.message}`);
     }
 
-    // 清除已执行的延迟
-    node.delayManager.remove(`${chainName}:${delayItem.stepIndex}`);
+    // 清除已执行的延迟（直接使用原始 key，与 deviceCalculateCmp 中对齐）
+    if (delayItem.key) {
+      node.delayManager.remove(delayItem.key);
+    }
   }
 
   /**
@@ -346,25 +353,29 @@ module.exports = function(RED) {
    * 构建 pointList，填充当前点值
    * 区分单设备规则（ruleType=1）和多设备规则（ruleType=2）
    */
-  function buildPointList(rule, pointValues, pointValueCache, triggeredPointIds, log) {
-    const pointList = [];
-    const triggeredPointId = triggeredPointIds.size > 0 ? Array.from(triggeredPointIds)[0] : null;
+  function buildExecutionUnits(rule, pointValues, pointValueCache, triggeredPointIds, log) {
+    const units = [];
 
     if (!rule.rulePointTypes || !Array.isArray(rule.rulePointTypes)) {
-      return pointList;
+      return units;
     }
 
     const ruleTypeVal = String(rule.ruleType);
     const isSingleDevice = ruleTypeVal === '1';
     const isMultiDevice = ruleTypeVal === '2';
 
-    // ============ 单设备规则 ============
-    if (isSingleDevice && triggeredPointId && rule.equipPoints && Array.isArray(rule.equipPoints)) {
-      const triggeredEp = rule.equipPoints.find(ep => ep.pointId === triggeredPointId);
-      const equipId = triggeredEp ? triggeredEp.equipId : null;
+    // ============ 单设备规则：按 equipId 拆分 ============
+    if (isSingleDevice && triggeredPointIds.size > 0 && rule.equipPoints && Array.isArray(rule.equipPoints)) {
+      const equipIdSet = new Set();
+      for (const pid of triggeredPointIds) {
+        const ep = rule.equipPoints.find(e => e.pointId === pid);
+        if (ep && ep.equipId) {
+          equipIdSet.add(ep.equipId);
+        }
+      }
 
-      if (equipId) {
-        log(`[buildPointList][${rule.chainName}] 单设备规则, equipId=${equipId}`);
+      for (const equipId of equipIdSet) {
+        const pointList = [];
         const devicePoints = rule.equipPoints.filter(ep => ep.equipId === equipId);
         for (const dp of devicePoints) {
           const rpt = rule.rulePointTypes.find(r => String(r.pointTypeId) === String(dp.pointTypeId));
@@ -380,25 +391,36 @@ module.exports = function(RED) {
             valueType: dp.valueType
           });
         }
-        log(`[buildPointList][${rule.chainName}] 单设备 pointList 构建完成, 共 ${pointList.length} 个点`);
-        return pointList;
+        log(`[buildPointList][${rule.chainName}] 单设备规则, equipId=${equipId}, 点位数=${pointList.length}`);
+        units.push({ pointList, equipId });
       }
     }
 
-    // ============ 多设备规则 ============
-    if (isMultiDevice && triggeredPointId && rule.equipPoints && Array.isArray(rule.equipPoints)) {
+    // ============ 多设备规则：按分组拆分 ============
+    if (isMultiDevice && triggeredPointIds.size > 0 && rule.equipPoints && Array.isArray(rule.equipPoints)) {
       const groupMapping = rule.groupMapping || {};
-      const groups = groupMapping[triggeredPointId] || {};
-      const groupPointIds = new Set();
+      const groupNameSet = new Set();
 
-      for (const groupName of Object.keys(groups)) {
-        for (const pid of groups[groupName]) {
-          groupPointIds.add(pid);
+      for (const pid of triggeredPointIds) {
+        const groups = groupMapping[pid] || {};
+        for (const groupName of Object.keys(groups)) {
+          groupNameSet.add(groupName);
         }
       }
 
-      if (groupPointIds.size > 0) {
-        log(`[buildPointList][${rule.chainName}] 多设备规则, 分组点位数=${groupPointIds.size}`);
+      for (const groupName of groupNameSet) {
+        const pointList = [];
+        const groupPointIds = new Set();
+
+        for (const pid of triggeredPointIds) {
+          const groups = groupMapping[pid] || {};
+          if (groups[groupName] && Array.isArray(groups[groupName])) {
+            for (const gpid of groups[groupName]) {
+              groupPointIds.add(gpid);
+            }
+          }
+        }
+
         for (const pid of groupPointIds) {
           const ep = rule.equipPoints.find(e => e.pointId === pid);
           if (ep) {
@@ -416,39 +438,43 @@ module.exports = function(RED) {
             });
           }
         }
-        log(`[buildPointList][${rule.chainName}] 多设备 pointList 构建完成, 共 ${pointList.length} 个点`);
-        return pointList;
+
+        log(`[buildPointList][${rule.chainName}] 多设备规则, groupName=${groupName}, 点位数=${pointList.length}`);
+        units.push({ pointList, groupName });
       }
     }
 
-    // ============ 回退到原有逻辑（无法区分设备/分组时） ============
-    for (const rpt of rule.rulePointTypes) {
-      const equipPoint = rule.equipPoints && Array.isArray(rule.equipPoints)
-        ? rule.equipPoints.find(ep => ep.pointTypeId === rpt.pointTypeId)
-        : null;
-      const currentValue = pointValues[rpt.pointTypeId];
-      pointList.push({
-        pointTypeId: rpt.pointTypeId,
-        dataType: rpt.dataType,
-        stepId: rpt.stepId,
-        pointId: currentValue ? currentValue.pointId : (equipPoint ? equipPoint.pointId : null),
-        slotPath: currentValue ? currentValue.slotPath : (equipPoint ? equipPoint.slotPath : null),
-        value: currentValue ? currentValue.value : null,
-        equipId: equipPoint ? equipPoint.equipId : null,
-        valueType: equipPoint ? equipPoint.valueType : null
-      });
+    // ============ 回退逻辑（无法区分设备/分组时，整体执行一次） ============
+    if (units.length === 0) {
+      const pointList = [];
+      for (const rpt of rule.rulePointTypes) {
+        const equipPoint = rule.equipPoints && Array.isArray(rule.equipPoints)
+          ? rule.equipPoints.find(ep => ep.pointTypeId === rpt.pointTypeId)
+          : null;
+        const currentValue = pointValues[rpt.pointTypeId];
+        pointList.push({
+          pointTypeId: rpt.pointTypeId,
+          dataType: rpt.dataType,
+          stepId: rpt.stepId,
+          pointId: currentValue ? currentValue.pointId : (equipPoint ? equipPoint.pointId : null),
+          slotPath: currentValue ? currentValue.slotPath : (equipPoint ? equipPoint.slotPath : null),
+          value: currentValue ? currentValue.value : null,
+          equipId: equipPoint ? equipPoint.equipId : null,
+          valueType: equipPoint ? equipPoint.valueType : null
+        });
+      }
+      log(`[buildPointList][${rule.chainName}] 回退逻辑, 点位数=${pointList.length}`);
+      units.push({ pointList });
     }
-    return pointList;
+
+    return units;
   }
 
   /**
-   * 执行告警恢复
+   * 执行告警恢复（与 Java 端 AlarmUtil.alarmRecovery 对齐）
    */
   function doAlarmRecovery(rule, pointList, triggeredPointIds, chainName, node, log, alarmStateCache, delayManager) {
     log(`[alarmRecovery][${chainName}] 触发告警恢复, 本次上报点位数=${triggeredPointIds.size}`);
-
-    // 清除延迟状态
-    delayManager.clear(chainName);
 
     // 只处理本次上报且存在告警缓存的点位
     let sentCount = 0;

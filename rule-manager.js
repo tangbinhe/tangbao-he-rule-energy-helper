@@ -289,6 +289,9 @@ module.exports = function(RED) {
       refreshEngineRuleCache(log);
       clearEngineAstCache(chainName, log);
 
+      // 同步清除 engine 节点中该规则的延迟和告警缓存（与 Java 端 handleRuleChangeByBuildingIdAndRuleId 对齐）
+      clearEngineDelayAndAlarm(chainName, log);
+
       results.push({
         type: 'ruleUpdated',
         chainName: chainName,
@@ -316,6 +319,9 @@ module.exports = function(RED) {
         }
       }
 
+      // 同步刷新 engine 节点的时间配置缓存
+      refreshEngineTimeCache(log);
+
       results.push({
         type: 'timeUpdated',
         count: timeList.length,
@@ -341,6 +347,9 @@ module.exports = function(RED) {
           node.mappingCache.set(mapping.pointTypeId, mapping.chainIds || []);
         }
       }
+
+      // 同步刷新 engine 节点的映射缓存
+      refreshEngineMappingCache(log);
 
       results.push({
         type: 'mappingUpdated',
@@ -375,6 +384,9 @@ module.exports = function(RED) {
       refreshEngineRuleCache(log);
       clearEngineAstCache(chainName, log);
 
+      // 同步清除 engine 节点中该规则的延迟和告警缓存（与 Java 端 handleRuleChangeByBuildingIdAndRuleId 对齐）
+      clearEngineDelayAndAlarm(chainName, log);
+
       results.push({
         type: 'ruleDeleted',
         chainName: chainName
@@ -408,6 +420,54 @@ module.exports = function(RED) {
   }
 
   /**
+   * 清除所有 engine 节点中指定规则的延迟和告警缓存
+   * 与 Java 端 ChainManageService.handleRuleChangeByBuildingIdAndRuleId 对齐
+   * @param {string} chainName - 规则链名称
+   * @param {Function} log - 日志函数
+   */
+  function clearEngineDelayAndAlarm(chainName, log) {
+    let delayCount = 0;
+    let alarmCount = 0;
+    RED.nodes.eachNode(function(n) {
+      if (n.type === 'rule-energy-engine') {
+        const engineNode = RED.nodes.getNode(n.id);
+        if (!engineNode) return;
+
+        // 清除延迟状态
+        if (engineNode.delayManager) {
+          const beforeSize = engineNode.delayManager.size();
+          engineNode.delayManager.clear(chainName);
+          const afterSize = engineNode.delayManager.size();
+          delayCount += (beforeSize - afterSize);
+        }
+
+        // 清除告警状态（基于原告警消息发送恢复后删除）
+        if (engineNode.alarmStateCache) {
+          const allStates = engineNode.alarmStateCache.getAll();
+          for (const [alarmKey, alarmState] of Object.entries(allStates)) {
+            if (alarmKey.startsWith(chainName + ':')) {
+              // 发送恢复消息（与 Java 端 alarmRecovery 对齐）
+              if (alarmState && alarmState.alarmMessage && engineNode.send) {
+                const recoveryPayload = JSON.parse(JSON.stringify(alarmState.alarmMessage));
+                recoveryPayload.alarmStatus = 'normal';
+                recoveryPayload.recoverDesc = '规则更新触发逻辑报警恢复';
+                recoveryPayload.recoverTime = Date.now();
+                recoveryPayload.timestamp = Date.now();
+                engineNode.send({ payload: recoveryPayload });
+              }
+              engineNode.alarmStateCache.delete(alarmKey);
+              alarmCount++;
+            }
+          }
+        }
+      }
+    });
+    if (delayCount > 0 || alarmCount > 0) {
+      log(`[rule-energy-manager] 清理 engine 延迟/告警缓存, chainName=${chainName}, 延迟=${delayCount}条, 告警=${alarmCount}条`);
+    }
+  }
+
+  /**
    * 刷新所有 engine 节点的规则缓存
    * @param {Function} log - 日志函数
    */
@@ -424,6 +484,46 @@ module.exports = function(RED) {
     });
     if (count > 0) {
       log(`[rule-energy-manager] 刷新 engine 规则缓存, 共 ${count} 个节点`);
+    }
+  }
+
+  /**
+   * 刷新所有 engine 节点的时间配置缓存
+   * @param {Function} log - 日志函数
+   */
+  function refreshEngineTimeCache(log) {
+    let count = 0;
+    RED.nodes.eachNode(function(n) {
+      if (n.type === 'rule-energy-engine') {
+        const engineNode = RED.nodes.getNode(n.id);
+        if (engineNode && engineNode.timeCache) {
+          engineNode.timeCache._load();
+          count++;
+        }
+      }
+    });
+    if (count > 0) {
+      log(`[rule-energy-manager] 刷新 engine 时间配置缓存, 共 ${count} 个节点`);
+    }
+  }
+
+  /**
+   * 刷新所有 engine 节点的映射缓存
+   * @param {Function} log - 日志函数
+   */
+  function refreshEngineMappingCache(log) {
+    let count = 0;
+    RED.nodes.eachNode(function(n) {
+      if (n.type === 'rule-energy-engine') {
+        const engineNode = RED.nodes.getNode(n.id);
+        if (engineNode && engineNode.mappingCache) {
+          engineNode.mappingCache._load();
+          count++;
+        }
+      }
+    });
+    if (count > 0) {
+      log(`[rule-energy-manager] 刷新 engine 映射缓存, 共 ${count} 个节点`);
     }
   }
 
@@ -501,6 +601,9 @@ module.exports = function(RED) {
     refreshEngineRuleCache(() => {});
     clearEngineAstCache(req.params.chainName, () => {});
 
+    // 同步清除 engine 节点中该规则的延迟和告警缓存
+    clearEngineDelayAndAlarm(req.params.chainName, () => {});
+
     res.json({ type: 'ruleDeleted', chainName: req.params.chainName });
   });
 
@@ -510,6 +613,10 @@ module.exports = function(RED) {
       return res.status(404).json({ error: '节点不存在或未就绪' });
     }
     node.timeCache.remove(req.params.timeName);
+
+    // 同步刷新 engine 节点的时间配置缓存
+    refreshEngineTimeCache(() => {});
+
     res.json({ type: 'timeDeleted', timeName: req.params.timeName });
   });
 
@@ -527,6 +634,10 @@ module.exports = function(RED) {
       return res.status(404).json({ error: '节点不存在或未就绪' });
     }
     node.mappingCache.remove(req.params.pointTypeId);
+
+    // 同步刷新 engine 节点的映射缓存
+    refreshEngineMappingCache(() => {});
+
     res.json({ type: 'mappingDeleted', pointTypeId: req.params.pointTypeId });
   });
 

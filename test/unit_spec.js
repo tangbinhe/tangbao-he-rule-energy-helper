@@ -176,7 +176,7 @@ describe('tangbao-he-rule-energy-helper 单元测试', function() {
 
   // ==================== effective-time-cmp ====================
   describe('effective-time-cmp', function() {
-    it('无时间配置应默认通过', function() {
+    it('无日期和时间配置应默认通过', function() {
       const result = effectiveTimeCmp({
         rule: {},
         chainName: 'test',
@@ -186,18 +186,21 @@ describe('tangbao-he-rule-energy-helper 单元测试', function() {
       assert.strictEqual(result, true);
     });
 
-    it('时间缓存不存在应默认通过', function() {
+    it('只配置了日期且满足应通过', function() {
       const cache = new TimeCache(noopLog);
+      cache.set('日期', { timeName: '日期', timeType: '3', begin: '2020-01-01', end: '2099-12-31' });
+
       const result = effectiveTimeCmp({
-        rule: { effectTimeName: '不存在的配置' },
+        rule: { effectDateName: '日期' },
         chainName: 'test',
         timeCache: cache,
-        log: noopLog
+        log: noopLog,
+        triggerAlarmRecovery: () => {}
       });
       assert.strictEqual(result, true);
     });
 
-    it('当前时间在范围内应通过', function() {
+    it('只配置了时间且满足应通过', function() {
       const begin = '00:00:00';
       const end = '23:59:59';
       const cache = new TimeCache(noopLog);
@@ -205,6 +208,34 @@ describe('tangbao-he-rule-energy-helper 单元测试', function() {
 
       const result = effectiveTimeCmp({
         rule: { effectTimeName: '全天' },
+        chainName: 'test',
+        timeCache: cache,
+        log: noopLog,
+        triggerAlarmRecovery: () => {}
+      });
+      assert.strictEqual(result, true);
+    });
+
+    it('配置了时间但缓存不存在应返回 false', function() {
+      const cache = new TimeCache(noopLog);
+      const result = effectiveTimeCmp({
+        rule: { effectTimeName: '不存在的配置' },
+        chainName: 'test',
+        timeCache: cache,
+        log: noopLog
+      });
+      assert.strictEqual(result, false);
+    });
+
+    it('日期和时间都配置且在范围内应通过', function() {
+      const begin = '00:00:00';
+      const end = '23:59:59';
+      const cache = new TimeCache(noopLog);
+      cache.set('日期', { timeName: '日期', timeType: '3', begin: '2020-01-01', end: '2099-12-31' });
+      cache.set('全天', { timeName: '全天', timeType: '2', begin, end });
+
+      const result = effectiveTimeCmp({
+        rule: { effectDateName: '日期', effectTimeName: '全天' },
         chainName: 'test',
         timeCache: cache,
         log: noopLog,
@@ -237,6 +268,7 @@ describe('tangbao-he-rule-energy-helper 单元测试', function() {
       let recoveryCalled = false;
       const result = deviceCalculateCmp({
         rule: {
+          ruleSource: 'alarm',
           scripts: [
             { stepIndex: 1, stepType: '0', function: 'EMPTY' },
             { stepIndex: 2, stepType: '1', function: '{1111101101}==0' }
@@ -288,9 +320,10 @@ describe('tangbao-he-rule-energy-helper 单元测试', function() {
             { pointId: 'pid-ctrl', slotPath: '/Drivers/控制点', pointTypeId: 1111101104, equipId: 'EQ-001' }
           ]
         },
-        pointList: [{ pointTypeId: 1111101104, value: '0' }],
+        pointList: [{ pointTypeId: 1111101104, pointId: 'pid-ctrl', slotPath: '/Drivers/控制点', value: '0', dataType: 'control', stepId: 557 }],
         chainName: 'test',
-        log: noopLog
+        log: noopLog,
+        currentStepIndex: 1
       });
       assert.strictEqual(result.type, 'control');
       assert.strictEqual(result.outputs[0].value, '1');
@@ -319,7 +352,7 @@ describe('tangbao-he-rule-energy-helper 单元测试', function() {
       const result = alarmCmp({
         rule: {
           ruleId: 1,
-          rulePointTypes: [{ dataType: 'in', pointTypeId: 1111101101 }],
+          rulePointTypes: [{ dataType: 'alarm', pointTypeId: 1111101101 }],
           priority: '1',
           alarmDesc: '测试告警'
         },
@@ -339,7 +372,7 @@ describe('tangbao-he-rule-energy-helper 单元测试', function() {
       const ctx = {
         rule: {
           ruleId: 1,
-          rulePointTypes: [{ dataType: 'in', pointTypeId: 1111101101 }]
+          rulePointTypes: [{ dataType: 'alarm', pointTypeId: 1111101101 }]
         },
         pointList: [{ pointTypeId: 1111101101, pointId: 'pid-alarm2', slotPath: '/a/b', value: '100' }],
         chainName: 'test',
