@@ -33,36 +33,6 @@ npm install /path/to/tangbao-he-rule-energy-helper
 
 接收云端下发的配置报文，解析并持久化到本地缓存。支持在节点编辑面板中可视化查看和管理规则。
 
-**云端下发报文格式**：
-
-```json
-{
-  "timeStamp": 1778743364523,
-  "companyId": "longfor",
-  "projectCard": "L-DLLH-DLKDT01",
-  "cmd": "set",
-  "detail": [
-    {
-      "rulePubType": "ruleAndPointInfo",
-      "edgeRuleInfo": "{...}",
-      "edgeEquipPointInfos": "[...]",
-      "edgeGroupEquipPointInfos": "[...]"
-    },
-    {
-      "rulePubType": "edgeRelativeTime",
-      "edgeRelativeTimeList": "[...]"
-    },
-    {
-      "rulePubType": "pointTypeRuleMapping",
-      "pointTypeRuleMappingList": "[...]"
-    }
-  ],
-  "version": "1.1"
-}
-```
-
-> `msg.payload` 直接传入报文内容，`detail` 在 payload 根层级。
-
 **支持的 rulePubType**：
 
 | 类型 | 说明 |
@@ -84,63 +54,6 @@ npm install /path/to/tangbao-he-rule-energy-helper
 
 接收点值上报，匹配规则，执行规则链，输出控制/告警/恢复消息。
 
-**输入数据格式**：
-
-```json
-{
-  "pointId": "TC1ETExILURMS0RUMDFfRExLRFQwMS0wMDA1XzExMTExMDExMDE=",
-  "slotPath": "/Drivers/水泵07/points/On/Off_Status",
-  "value": 0
-}
-```
-
-**输出数据格式**：
-
-```json
-// 控制输出
-{
-  "type": "control",
-  "chainName": "chain45",
-  "ruleId": 64,
-  "pointTypeId": 1111101104,
-  "value": "1"
-}
-
-// 告警输出
-{
-  "type": "alarm",
-  "chainName": "chain45",
-  "ruleId": 64,
-  "alarmId": "uuid",
-  "conditionId": "chain45_xxx",
-  "priority": "1",
-  "alarmDesc": "温度过高",
-  "pointId": "...",
-  "slotPath": "...",
-  "alarmValue": "100",
-  "pointTypeId": 1111101101,
-  "timestamp": 1778815454123
-}
-
-// 告警恢复（结构与告警触发一致，alarmStatus 为 Normal）
-{
-  "type": "alarm",
-  "chainName": "chain45",
-  "ruleId": 64,
-  "alarmId": "uuid",
-  "conditionId": "chain45_xxx",
-  "priority": "1",
-  "alarmDesc": "温度过高",
-  "alarmStatus": "Normal",
-  "pointId": "...",
-  "slotPath": "...",
-  "alarmValue": "100",
-  "pointTypeId": 1111101101,
-  "normalTime": 1778815454123,
-  "timestamp": 1778815454123
-}
-```
-
 ## 规则链执行流程
 
 ```
@@ -148,39 +61,6 @@ npm install /path/to/tangbao-he-rule-energy-helper
     → 生效时间判断 (effectiveTimeCmp)
         → 设备条件计算 (deviceCalculateCmp) [支持延迟]
             → 控制输出 (controlCmp) / 告警输出 (alarmCmp)
-```
-
-## 规则数据结构
-
-```json
-{
-  "chainName": "chain45",
-  "ruleId": 64,
-  "ruleType": "1",
-  "ruleSource": "control",
-  "effectTimeName": "营业时间",
-  "elData": "<chain>IF(effectiveTimeCmp,IF(deviceCalculateCmp,controlCmp))</chain>",
-  "scripts": [
-    { "stepIndex": 1, "stepType": "0", "function": "EMPTY" },
-    { "stepIndex": 2, "stepType": "1", "function": "{1111101101}==0", "delay": 10 },
-    { "stepIndex": 3, "stepType": "3", "function": "1" }
-  ],
-  "rulePointTypes": [
-    { "dataType": "in", "pointTypeId": 1111101101 },
-    { "dataType": "control", "pointTypeId": 1111101104 }
-  ],
-  "equipPoints": [
-    { "equipId": "...", "pointId": "...", "pointTypeId": 1111101101, "slotPath": "..." }
-  ],
-  "groupEquipPoints": [
-    { "equipId": "...", "pointId": "...", "pointTypeId": 1111101101, "slotPath": "...", "groupName": "groupA" }
-  ],
-  "groupMapping": {
-    "pointId1": { "groupA": ["pointId1", "pointId2"] }
-  },
-  "alarmLevel": "1",
-  "alarmDesc": "温度过高"
-}
 ```
 
 ## HTTP Admin API
